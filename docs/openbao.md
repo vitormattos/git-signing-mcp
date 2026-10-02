@@ -6,22 +6,31 @@ The MCP can use OpenBao for two secrets:
 - the Git signing private key.
 
 For a self-contained deployment, use the optional local OpenBao Compose override.
-The tracked template is `docker-compose.openbao.yml`; copy it to the ignored
-`docker-compose.override.yml` on the VPS:
+The tracked template is `docker-compose.openbao.yml`; symlink it to the ignored
+`docker-compose.override.yml` on the VPS so future `git pull` updates are picked
+up automatically:
 
 ```bash
-cp docker-compose.openbao.yml docker-compose.override.yml
+ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 ```
 
 Docker Compose will then load it automatically together with
 `docker-compose.yml`.
 
 The override adds a single-node OpenBao service on the private Docker network. It
-publishes no host port and uses persistent PebbleDB storage. OpenBao 2.7.x
+publishes no host port and uses persistent PebbleDB storage under
+`./volumes/openbao` on the host. OpenBao 2.7.x
 removed the old file backend; PebbleDB is the durable single-node backend used by
 this deployment.
 
 ## Bootstrap the local OpenBao
+
+Create the host-backed data directory first. OpenBao runs as UID/GID 100 in the
+container, so make that directory writable by UID 100:
+
+```bash
+install -d -m 700 -o 100 -g 100 volumes/openbao
+```
 
 Start only OpenBao first. The bind-mounted HCL file is tracked by Git and owned
 by the host checkout user, while the container runs OpenBao as UID 100. The
