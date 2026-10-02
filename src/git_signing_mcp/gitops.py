@@ -165,7 +165,16 @@ class RepositoryCache:
                 auth_env,
             )
             _run(
-                ["git", "clone", "--quiet", "--no-hardlinks", str(cache), str(destination)],
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--no-hardlinks",
+                    "--branch",
+                    "__mcp_source",
+                    str(cache),
+                    str(destination),
+                ],
                 cache,
                 env,
             )
