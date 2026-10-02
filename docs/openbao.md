@@ -23,11 +23,23 @@ this deployment.
 
 ## Bootstrap the local OpenBao
 
-Start only OpenBao first:
+Start only OpenBao first. The OpenBao image runs as a non-root `openbao` user,
+so the bind-mounted HCL file must be readable by that user. The configuration
+file is not a secret and should be mode 0644:
 
 ```bash
+chmod 644 deploy/openbao/openbao.hcl
+chmod 755 deploy deploy/openbao
+
 docker compose up -d openbao
 docker compose logs --tail=100 openbao
+```
+
+If you previously ran `umask 077` in the current shell, restore a normal umask
+before pulling or creating non-secret repository files:
+
+```bash
+umask 022
 ```
 
 Initialize it once:
@@ -144,14 +156,21 @@ Store them in the file-backed Compose secrets expected by the MCP:
 
 ```bash
 install -d -m 700 secrets
-umask 077
 
-printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
-printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
+(
+  umask 077
+  printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
+  printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
+)
+
 chmod 600 secrets/openbao_role_id secrets/openbao_secret_id
 
 unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID BAO_TOKEN
 ```
+
+Using a subshell keeps the restrictive `umask 077` scoped to secret creation;
+it does not accidentally make later checked-out configuration files unreadable
+to non-root containers.
 
 ## Security notes
 

@@ -33,16 +33,20 @@ values therefore live in files instead.
 After the OpenBao bootstrap has produced the AppRole credentials:
 
 ```bash
-umask 077
+(
+  umask 077
 
-printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
-printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
-
-openssl rand -hex 32 > secrets/mcp_tunnel_shared_secret
+  printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
+  printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
+  openssl rand -hex 32 > secrets/mcp_tunnel_shared_secret
+)
 
 chmod 600 secrets/*
 unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID
 ```
+
+The restrictive umask is intentionally scoped to a subshell so normal tracked
+configuration files keep readable permissions for non-root containers.
 
 The OpenAI tunnel runtime key is added later as:
 
