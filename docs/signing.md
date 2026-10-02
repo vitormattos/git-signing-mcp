@@ -34,8 +34,17 @@ Store an ASCII-armored OpenPGP private key. The container imports it into a
 temporary GNUPGHOME for the operation, signs the commit, then deletes the
 temporary directory.
 
-Use a non-interactive signing key. Passphrase prompting is intentionally not
-implemented.
+When `SIGNING_KEY_SOURCE=openbao`, passphrase-protected OpenPGP keys are
+supported. Store the passphrase in the same KV v2 secret as the private key,
+using the field configured by `OPENBAO_SIGNING_PASSPHRASE_FIELD` (default:
+`passphrase`). Unprotected keys continue to work without that field.
+
+For protected keys, the service writes the passphrase to a mode-0600 file inside
+the per-operation temporary secret directory and configures a mode-0700 GPG
+wrapper that uses `--batch --pinentry-mode loopback --passphrase-file`. The
+passphrase is not placed in the GPG command line or process environment. The
+temporary directory is removed after the operation and is located under the MCP
+container's `/tmp` tmpfs in the recommended Compose deployment.
 
 ## DCO
 
