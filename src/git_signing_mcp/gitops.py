@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 import shutil
 import stat
 import subprocess
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from .config import Settings
 from .models import FileChange
+from .security import validate_change_path
 
 
+logger = logging.getLogger(__name__)
 _SIGNOFF_RE = re.compile(r"^Signed-off-by:\s*.+$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -21,13 +24,31 @@ def normalize_commit_message(message: str, name: str, email: str) -> str:
     return f"{cleaned}\n\nSigned-off-by: {name} <{email}>"
 
 
-def validate_change_path(path: str) -> PurePosixPath:
-    candidate = PurePosixPath(path)
-    if candidate.is_absolute() or not candidate.parts:
-        raise ValueError(f"invalid repository path: {path}")
-    if ".." in candidate.parts or candidate.parts[0] == ".git":
-        raise ValueError(f"unsafe repository path: {path}")
-    return candidate
+def _base_subprocess_env(home: Path) -> dict[str, str]:
+    tmp = home / "tmp"
+    tmp.mkdir(mode=0o700, exist_ok=True)
+    return {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(home),
+        "TMPDIR": str(tmp),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+
+
+def _git_auth_env(base_env: dict[str, str], token: str) -> dict[str, str]:
+    env = base_env.copy()
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {encoded}",
+        }
+    )
+    return env
 
 
 def _run(
@@ -43,28 +64,17 @@ def _run(
         env=env,
         input=input_text,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if process.returncode != 0:
-        detail = process.stderr.strip() or process.stdout.strip()
-        raise RuntimeError(f"command failed ({args[0]}): {detail}")
+        logger.error(
+            "subprocess failed: executable=%s returncode=%s",
+            Path(args[0]).name,
+            process.returncode,
+        )
+        raise RuntimeError("Git operation failed")
     return process.stdout.strip()
-
-
-def _git_auth_env(token: str) -> dict[str, str]:
-    env = os.environ.copy()
-    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    env.update(
-        {
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
-            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {encoded}",
-        }
-    )
-    return env
 
 
 def _configure_identity(repo: Path, env: dict[str, str], settings: Settings) -> None:
@@ -109,7 +119,7 @@ def _configure_openpgp_signing(
         line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
     ]
     if not fingerprints:
-        raise RuntimeError("the OpenPGP secret did not contain a usable private key")
+        raise RuntimeError("OpenPGP signing key is unusable")
     _run(["git", "config", "gpg.format", "openpgp"], repo, gpg_env)
     _run(["git", "config", "user.signingkey", fingerprints[0]], repo, gpg_env)
     return gpg_env
@@ -134,9 +144,12 @@ def create_signed_commit(
         root = Path(temp)
         repo = root / "repo"
         secret_dir = root / "secrets"
+        process_home = root / "home"
         repo.mkdir()
         secret_dir.mkdir(mode=0o700)
-        env = _git_auth_env(github_token)
+        process_home.mkdir(mode=0o700)
+        env = _base_subprocess_env(process_home)
+        git_auth_env = _git_auth_env(env, github_token)
 
         _run(["git", "init", "--quiet"], repo, env)
         _run(["git", "remote", "add", "origin", f"https://github.com/{repository}.git"], repo, env)
@@ -145,7 +158,7 @@ def create_signed_commit(
         _run(
             ["git", "fetch", "--quiet", "--depth=1", "origin", f"refs/heads/{source_branch}"],
             repo,
-            env,
+            git_auth_env,
         )
         _run(["git", "checkout", "--quiet", "-B", "work", "FETCH_HEAD"], repo, env)
 
@@ -156,7 +169,7 @@ def create_signed_commit(
             env = _configure_openpgp_signing(repo, env, signing_key, secret_dir)
 
         for change in changes:
-            rel = validate_change_path(change.path)
+            rel = validate_change_path(repo, change.path)
             target = repo.joinpath(*rel.parts)
             if change.operation == "delete":
                 if target.exists():
@@ -188,10 +201,13 @@ def create_signed_commit(
         _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, env)
         commit_sha = _run(["git", "rev-parse", "HEAD"], repo, env)
 
-        # No force push. A concurrent update makes this push fail instead of overwriting it.
+        raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
+        if "\ngpgsig " not in f"\n{raw_commit}":
+            raise RuntimeError("Git produced an unsigned commit")
+
         _run(
             ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"],
             repo,
-            env,
+            git_auth_env,
         )
         return commit_sha

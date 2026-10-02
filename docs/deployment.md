@@ -1,93 +1,99 @@
 # Deployment
 
-## 1. Clone and configure
+## 1. Create the OpenAI Secure MCP Tunnel
+
+In the OpenAI Platform, create a Secure MCP Tunnel for the target organization
+and ChatGPT workspace. Obtain:
+
+- the tunnel ID;
+- a runtime API key that has only the permissions required to use that tunnel.
+
+Do not use an admin key as the long-lived runtime credential.
+
+The tunnel-client needs outbound HTTPS access to api.openai.com:443. No inbound
+firewall port is required for the MCP service.
+
+## 2. Clone and configure
 
 ```bash
 git clone git@github.com:vitormattos/git-signing-mcp.git
 cd git-signing-mcp
 cp .env.example .env
-cp docker-compose.override.example.yml docker-compose.override.yml
 ```
 
-Edit .env before starting the service.
+Generate the local hop secret:
 
-At minimum configure:
+```bash
+openssl rand -hex 32
+```
 
-- MCP_PUBLIC_URL
-- MCP_ALLOWED_HOSTS
-- MCP_AUTH_MODE and its credential source
+Put it in `MCP_TUNNEL_SHARED_SECRET`.
+
+Configure at minimum:
+
+- OPENAI_TUNNEL_ID
+- OPENAI_TUNNEL_RUNTIME_API_KEY
+- MCP_TUNNEL_SHARED_SECRET
 - ALLOWED_REPOSITORIES
 - GIT_IDENTITY_NAME and GIT_IDENTITY_EMAIL
 - SIGNING_FORMAT and signing key source
 - GitHub token source
 - OpenBao settings when OpenBao is used
-- PROXY_NETWORK
 
-The Git identity must be the same identity used by the DCO trailer. The signing
-public key must also be registered with GitHub as a signing key for the account.
+## 3. Do not configure Nginx
 
-## 2. Reverse proxy network
+There is intentionally no reverse-proxy override.
 
-The base Compose file does not publish a host port. The override attaches the
-container to an existing external Docker network:
+The Compose file publishes no port for either the MCP service or tunnel-client.
+Do not add:
 
 ```yaml
-networks:
-  reverse-proxy:
-    external: true
-    name: ${PROXY_NETWORK:-nginx-proxy}
+ports:
+  - "8080:8080"
 ```
 
-Set PROXY_NETWORK to the Docker network shared with your reverse proxy.
+and do not attach `mcp` to your Nginx/Traefik/Cloudflare proxy network.
 
-Configure the reverse proxy to forward the public HTTPS hostname to:
+There is no DNS name to create for the MCP server.
 
-```text
-http://mcp:8080
-```
-
-Do not strip the Host header. MCP_ALLOWED_HOSTS must include the public host.
-
-## 3. Start
+## 4. Start
 
 ```bash
 docker compose up -d --build
 docker compose ps
-docker compose logs -f mcp
+docker compose logs -f tunnel-client
 ```
 
-Health check:
+The MCP container health check runs internally. tunnel-client waits for the MCP
+health check before starting.
 
-```bash
-curl -fsS https://your-host.example/healthz
-```
+## 5. Connect ChatGPT
 
-The MCP endpoint is:
+Create a developer-mode custom app and choose **Tunnel** as the connection type.
+Select the configured tunnel or paste its tunnel ID.
+
+Keep the app private. Do not publish or share it with users who should not be
+able to create signed commits.
+
+After connecting, test get_identity and verify_commit before the first write.
+
+## 6. Repository scope
+
+The default example allows any repository reachable by the GitHub credential:
 
 ```text
-https://your-host.example/mcp
+ALLOWED_REPOSITORIES=*/*
 ```
 
-## 4. Authentication
+You can narrow it at any time without changing the ChatGPT/tunnel setup.
 
-The initial implementation supports:
-
-- static-bearer: requires Authorization: Bearer <token>
-- none: intended only for isolated development
-
-Write-capable MCP servers should not be exposed without authentication.
-
-For ChatGPT production use, OAuth 2.1 that follows the MCP authorization
-specification is the preferred long-term mode. Static bearer remains useful for
-private development and clients that can inject an Authorization header.
-
-## 5. Updating
+## 7. Updating
 
 ```bash
 git pull --ff-only
+docker compose pull tunnel-client
 docker compose up -d --build
 ```
 
-No application state is stored in the container. Temporary Git worktrees and
-decrypted signing material are created under /tmp, which the Compose file mounts
-as tmpfs.
+The official tunnel-client image is pinned to an exact release in Compose.
+Review and update that version deliberately.

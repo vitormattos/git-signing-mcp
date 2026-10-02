@@ -23,6 +23,7 @@ class GitHubClient:
                 "User-Agent": "git-signing-mcp/0.1",
             },
             timeout=20,
+            trust_env=False,
         )
 
     def validate_repository(self, repository: str) -> None:

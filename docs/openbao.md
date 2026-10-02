@@ -1,70 +1,33 @@
 # OpenBao setup
 
-The server supports AppRole authentication and KV v2 reads.
+The server supports AppRole authentication and KV v2 reads for two values:
 
-This design keeps the GitHub token and signing private key out of the image and
-repository. OpenBao returns the secret to the running process only when needed.
-The signing key is written only into the container's tmpfs work directory for
-the duration of a commit operation.
+- the GitHub credential;
+- the Git signing private key.
 
-## Example KV layout
+The OpenAI tunnel runtime API key and the local tunnel-to-MCP shared secret are
+deployment credentials and are not fetched through this OpenBao integration.
 
-```text
-secret/
-  git-signing/
-    signing   -> private_key
-    github    -> token
-    mcp       -> token
-```
+Use separate KV v2 entries for the GitHub credential and signing key. For SSH
+signing, store a dedicated SSH private signing key. For OpenPGP, store the
+ASCII-armored private key.
 
-Example writes:
-
-```bash
-bao kv put secret/git-signing/signing private_key=@./id_ed25519
-bao kv put secret/git-signing/github token="$GITHUB_TOKEN"
-bao kv put secret/git-signing/mcp token="$MCP_BEARER_TOKEN"
-```
-
-For OpenPGP, store the ASCII-armored private key in the same private_key field.
+Use a dedicated Git signing key for this service. Do not reuse an SSH login key.
 
 ## Policy
 
-A narrowly scoped policy is enough:
+The AppRole used by this service should have read access only to the two exact KV
+paths needed by the deployment. It should not have list, write, delete, sudo, or
+access to unrelated secrets.
 
-```hcl
-path "secret/data/git-signing/signing" {
-  capabilities = ["read"]
-}
-
-path "secret/data/git-signing/github" {
-  capabilities = ["read"]
-}
-
-path "secret/data/git-signing/mcp" {
-  capabilities = ["read"]
-}
-```
-
-Example:
-
-```bash
-bao policy write git-signing-mcp ./git-signing-mcp.hcl
-bao auth enable approle
-bao write auth/approle/role/git-signing-mcp \
-  token_policies="git-signing-mcp" \
-  token_ttl=20m \
-  token_max_ttl=1h
-```
-
-Retrieve the AppRole identifiers using your normal secret-delivery process.
-Prefer OPENBAO_ROLE_ID_FILE and OPENBAO_SECRET_ID_FILE over placing those values
-directly in .env.
+Use short-lived AppRole tokens. Deliver the Role ID and Secret ID through mounted
+secret files when possible rather than embedding them in the image.
 
 ## GitHub token permissions
 
-Use a fine-grained token where possible. Give it access only to repositories the
-service is allowed to modify and only the contents permission needed to fetch and
-push Git commits.
+Use a fine-grained GitHub credential where possible. If
+ALLOWED_REPOSITORIES=*/* is intentional, the GitHub credential still decides
+which repositories can actually be read and pushed.
 
-The MCP server additionally enforces ALLOWED_REPOSITORIES. Both controls should
-be narrow; neither replaces the other.
+Grant only the Contents permission required for Git fetch/push and only the
+repository scope appropriate to this deployment.
