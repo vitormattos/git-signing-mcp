@@ -17,8 +17,9 @@ ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 -o 100 -g 100 volumes/openbao
 ```
 
-`docker-compose.override.yml` is intentionally ignored by Git and is loaded
-automatically by Docker Compose. OpenBao persists its data in
+`docker-compose.override.yml` and `volumes/` are intentionally ignored by Git.
+Docker Compose loads the override automatically, while OpenBao persists its data
+under `./volumes/openbao`. OpenBao persists its data in
 `./volumes/openbao`, which is also ignored by Git. The main Compose file therefore remains usable
 with an external OpenBao, while a VPS can opt into the local stateful service
 without having to remember multiple `-f` arguments.
