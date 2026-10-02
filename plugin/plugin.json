@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "git-signing-mcp",
+  "version": "0.1.0",
+  "description": "Create Git commits through a self-hosted MCP server with DCO enforcement and cryptographic signing.",
+  "author": {
+    "name": "Vitor Mattos"
+  },
+  "repository": "https://github.com/vitormattos/git-signing-mcp",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Signed Git Commits",
+        "shortDescription": "Create verified Git commits",
+        "longDescription": "Create Git commits with a fixed server-side identity, DCO sign-off, SSH or OpenPGP cryptographic signing, repository allowlists, and GitHub verification.",
+        "developerName": "Vitor Mattos",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Create this Git commit with DCO and cryptographic signing: ",
+          "Verify the DCO and cryptographic signature of this commit: "
+        ]
+      }
+    }
+  }
+}

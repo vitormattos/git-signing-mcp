@@ -1,0 +1,10 @@
+services:
+  mcp:
+    networks:
+      - default
+      - reverse-proxy
+
+networks:
+  reverse-proxy:
+    external: true
+    name: ${PROXY_NETWORK:-nginx-proxy}

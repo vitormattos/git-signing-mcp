@@ -1,0 +1,3 @@
+interface:
+  display_name: "Signed Git Commit"
+  short_description: "Create DCO and cryptographically signed Git commits"
