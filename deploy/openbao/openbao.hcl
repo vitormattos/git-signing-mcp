@@ -1,5 +1,4 @@
 ui = false
-disable_mlock = false
 api_addr = "http://openbao:8200"
 
 listener "tcp" {
