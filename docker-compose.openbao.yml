@@ -22,8 +22,6 @@ services:
       - /tmp:rw,noexec,nosuid,size=64m
     cap_drop:
       - ALL
-    cap_add:
-      - IPC_LOCK
     security_opt:
       - no-new-privileges:true
     mem_swappiness: 0
