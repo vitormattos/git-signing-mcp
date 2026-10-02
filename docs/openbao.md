@@ -23,9 +23,11 @@ this deployment.
 
 ## Bootstrap the local OpenBao
 
-Start only OpenBao first. The OpenBao image runs as a non-root `openbao` user,
-so the bind-mounted HCL file must be readable by that user. The configuration
-file is not a secret and should be mode 0644:
+Start only OpenBao first. The bind-mounted HCL file is tracked by Git and owned
+by the host checkout user, while the container runs OpenBao as UID 100. The
+optional OpenBao ownership check is therefore deliberately left disabled; the
+configuration file contains no secrets and only needs to be readable by the
+container. Keep it mode 0644:
 
 ```bash
 chmod 644 deploy/openbao/openbao.hcl
@@ -34,6 +36,12 @@ chmod 755 deploy deploy/openbao
 docker compose up -d openbao
 docker compose logs --tail=100 openbao
 ```
+
+Do not enable `BAO_ENABLE_FILE_PERMISSIONS_CHECK` for this bind-mounted
+configuration: when enabled, OpenBao requires the config file to be owned by its
+runtime UID (100), which conflicts with a normal Git checkout owned by the host
+administrator. The OpenBao documentation states this check is disabled by
+default.
 
 If you previously ran `umask 077` in the current shell, restore a normal umask
 before pulling or creating non-secret repository files:
