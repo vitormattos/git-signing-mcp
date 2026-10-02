@@ -18,7 +18,13 @@ from .github import GitHubClient
 from .gitops import create_signed_commit
 from .models import CommitRequest, CommitResult, VerificationResult
 from .secrets import SecretResolver
-from .security import WriteGuard, audit, new_request_id, validate_branch_policy
+from .security import (
+    WriteGuard,
+    audit,
+    new_request_id,
+    validate_branch_name,
+    validate_branch_policy,
+)
 
 
 logging.basicConfig(
@@ -108,7 +114,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
     try:
         github.validate_repository(request.repository)
         validate_branch_policy(settings, request.branch)
-        validate_branch_policy(settings, request.base_branch)
+        validate_branch_name(request.base_branch)
 
         with write_guard.hold():
             current_head = github.branch_sha(request.repository, request.branch)
