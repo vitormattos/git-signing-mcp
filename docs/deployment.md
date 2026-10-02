@@ -2,15 +2,14 @@
 
 ## 1. Create the OpenAI Secure MCP Tunnel
 
-In the OpenAI Platform, create a Secure MCP Tunnel for the target organization
-and ChatGPT workspace. Obtain:
+Create a Secure MCP Tunnel for the target OpenAI organization/workspace and obtain:
 
 - the tunnel ID;
-- a runtime API key that has only the permissions required to use that tunnel.
+- a runtime API key with only Tunnels Read + Use.
 
-Do not use an admin key as the long-lived runtime credential.
+Do not use an admin key for the long-running tunnel client.
 
-The tunnel-client needs outbound HTTPS access to api.openai.com:443. No inbound
+The tunnel client needs outbound HTTPS access to api.openai.com:443. No inbound
 firewall port is required for the MCP service.
 
 ## 2. Clone and configure
@@ -19,75 +18,101 @@ firewall port is required for the MCP service.
 git clone git@github.com:vitormattos/git-signing-mcp.git
 cd git-signing-mcp
 cp .env.example .env
+install -d -m 700 secrets
 ```
 
-Generate the local hop secret:
+The `.env` file is still a file on disk, but Docker Compose uses values from it
+for variable substitution. If a substituted value is placed under a service's
+`environment:` section, that value becomes a container environment variable.
+
+For that reason, production secrets are stored as files and mounted through
+Docker Compose secrets instead of being placed directly in `.env`.
+
+Create the secret files:
 
 ```bash
-openssl rand -hex 32
+umask 077
+
+printf '%s' "$OPENAI_TUNNEL_RUNTIME_API_KEY" \
+  > secrets/openai_tunnel_runtime_api_key
+
+openssl rand -hex 32 \
+  > secrets/mcp_tunnel_shared_secret
+
+printf '%s' "$OPENBAO_ROLE_ID" \
+  > secrets/openbao_role_id
+
+printf '%s' "$OPENBAO_SECRET_ID" \
+  > secrets/openbao_secret_id
+
+chmod 600 secrets/*
 ```
 
-Put it in `MCP_TUNNEL_SHARED_SECRET`.
+Then remove the secret values from the current shell:
 
-Configure at minimum:
+```bash
+unset OPENAI_TUNNEL_RUNTIME_API_KEY OPENBAO_ROLE_ID OPENBAO_SECRET_ID
+```
+
+Configure non-secret values in `.env`, especially:
 
 - OPENAI_TUNNEL_ID
-- OPENAI_TUNNEL_RUNTIME_API_KEY
-- MCP_TUNNEL_SHARED_SECRET
 - ALLOWED_REPOSITORIES
-- GIT_IDENTITY_NAME and GIT_IDENTITY_EMAIL
-- SIGNING_FORMAT and signing key source
-- GitHub token source
-- OpenBao settings when OpenBao is used
+- GIT_IDENTITY_NAME
+- GIT_IDENTITY_EMAIL
+- OPENBAO_ADDR
+- OpenBao KV paths
+
+The default secret file paths are already present in `.env.example`.
 
 ## 3. Do not configure Nginx
 
-There is intentionally no reverse-proxy override.
+There is intentionally no reverse-proxy override and no public MCP endpoint.
 
-The Compose file publishes no port for either the MCP service or tunnel-client.
-Do not add:
+Do not add a host port and do not attach the MCP container to your
+Nginx/Traefik/Cloudflare proxy network.
 
-```yaml
-ports:
-  - "8080:8080"
-```
-
-and do not attach `mcp` to your Nginx/Traefik/Cloudflare proxy network.
-
-There is no DNS name to create for the MCP server.
-
-## 4. Start
+## 4. Validate configuration
 
 ```bash
+docker compose config --quiet
+docker compose config | grep -n "published:"
+```
+
+The second command should print nothing.
+
+## 5. Start
+
+```bash
+docker compose pull tunnel-client
 docker compose up -d --build
 docker compose ps
 docker compose logs -f tunnel-client
 ```
 
-The MCP container health check runs internally. tunnel-client waits for the MCP
-health check before starting.
+The MCP container health check runs internally. The tunnel client waits for the
+MCP health check before starting.
 
-## 5. Connect ChatGPT
+## 6. Connect ChatGPT
 
-Create a developer-mode custom app and choose **Tunnel** as the connection type.
-Select the configured tunnel or paste its tunnel ID.
+Create a private developer-mode custom app and choose Tunnel as the connection
+type. Select the configured tunnel or paste its tunnel ID.
 
-Keep the app private. Do not publish or share it with users who should not be
-able to create signed commits.
+Do not publish or share the app with users who should not be able to create
+signed commits.
 
 After connecting, test get_identity and verify_commit before the first write.
 
-## 6. Repository scope
-
-The default example allows any repository reachable by the GitHub credential:
+## 7. Repository scope
 
 ```text
 ALLOWED_REPOSITORIES=*/*
 ```
 
-You can narrow it at any time without changing the ChatGPT/tunnel setup.
+allows any repository reachable by the configured GitHub credential. Narrow it
+at any time without changing the tunnel setup.
 
-## 7. Updating
+## 8. Updating
 
 ```bash
 git pull --ff-only
@@ -95,5 +120,6 @@ docker compose pull tunnel-client
 docker compose up -d --build
 ```
 
-The official tunnel-client image is pinned to an exact release in Compose.
-Review and update that version deliberately.
+The Python base image and OpenAI tunnel-client image are both pinned by digest.
+Dependabot is configured for Docker and Docker Compose so image changes arrive
+as explicit pull requests instead of changing silently.

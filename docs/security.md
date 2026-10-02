@@ -2,61 +2,61 @@
 
 ## Goal
 
-The production target is not "a hard-to-guess public MCP URL". The target is
-"No public MCP ingress at all."
+The production target is no public MCP ingress. OpenAI Secure MCP Tunnel provides
+the connection from authorized OpenAI products to the private MCP server.
 
-OpenAI Secure MCP Tunnel provides the connection from supported OpenAI products
-to a private MCP server. The tunnel-client runs beside the server and initiates
-outbound HTTPS to OpenAI.
+## Secret files versus .env
+
+A `.env` file is a file on disk, but Docker Compose normally uses it for
+variable substitution. If a substituted value is placed under a service's
+`environment:` block, that secret becomes part of the container environment and
+can be exposed through process/container inspection to sufficiently privileged
+operators.
+
+The production Compose file instead mounts secret values as files under
+`/run/secrets/`:
 
 ```text
-Internet
-   X
-   X no inbound route
-   X
-git-signing-mcp <--- private Docker network ---> tunnel-client
-                                             |
-                                             | outbound HTTPS :443
-                                             v
-                                      OpenAI tunnel control plane
-                                             ^
-                                             |
-                                          ChatGPT
+./secrets/openai_tunnel_runtime_api_key
+./secrets/mcp_tunnel_shared_secret
+./secrets/openbao_role_id
+./secrets/openbao_secret_id
+        |
+        v
+/run/secrets/<name>
 ```
+
+The `.env` file contains only non-secret configuration and paths to these secret
+files. The tunnel client uses its supported `file:/...` references and the MCP
+uses `*_FILE` settings.
+
+This does not protect against a compromised Docker host or root administrator,
+which remain inside the trusted computing base. It does reduce accidental
+exposure through environment dumps, `docker inspect`, diagnostics, and logging.
+
+## Immutable container inputs
+
+The Python base image and the OpenAI tunnel-client image are pinned as
+`tag@sha256:digest`. The tag stays readable while the digest determines the
+exact image content executed.
+
+Dependabot is configured for Dockerfile and Docker Compose so image updates are
+proposed explicitly instead of changing underneath a running deployment.
 
 ## Access layers
 
-1. OpenAI Platform tunnel permissions control who can use the tunnel.
-2. ChatGPT workspace/app availability controls who can invoke the custom app.
-3. The MCP server is not exposed on a host port or reverse proxy.
-4. tunnel-client injects a local shared secret that the MCP requires.
-5. Repository and branch policies constrain the requested write.
-6. The GitHub credential determines the final repository permissions.
-7. GitHub branch protection/rulesets remain authoritative after push.
-
-A request must pass every applicable layer.
+1. OpenAI tunnel permissions control who can use the tunnel.
+2. ChatGPT app/workspace availability controls who can invoke the custom app.
+3. The MCP service has no published host port or reverse-proxy route.
+4. tunnel-client authenticates to the MCP using a file-backed local secret.
+5. Repository and branch policies constrain writes.
+6. The GitHub credential defines the final repository permissions.
+7. GitHub branch protection/rulesets remain authoritative.
 
 ## Repository policy
 
-`ALLOWED_REPOSITORIES` is comma-separated and supports fnmatch patterns.
-
-Allow everything the GitHub credential can reach:
-
-```text
-ALLOWED_REPOSITORIES=*/*
-```
-
-Narrow examples:
-
-```text
-ALLOWED_REPOSITORIES=LibreSign/*,LibreCodeCoop/*
-```
-
-or:
-
-```text
-ALLOWED_REPOSITORIES=LibreSign/libresign,vitormattos/git-signing-mcp
-```
+`ALLOWED_REPOSITORIES=*/*` allows every repository reachable by the configured
+GitHub credential. Narrower fnmatch patterns may be used at any time.
 
 ## Branch policy
 
@@ -66,59 +66,27 @@ Direct writes are denied by default for:
 main,master,trunk,production,release/*
 ```
 
-Change `PROTECTED_BRANCH_PATTERNS` to match your workflow.
-
-Setting:
-
-```text
-ALLOW_PROTECTED_BRANCH_WRITES=true
-```
-
-removes this MCP-level guard. Repository rulesets can still reject the push.
-
 The service never force-pushes.
 
 ## Filesystem protections
 
-The write tool accepts UTF-8 file contents, not arbitrary shell commands.
-
-Before modifying a path it rejects:
-
-- absolute paths;
-- `..` traversal;
-- any `.git` path component;
-- any existing symlink in the target path;
-- resolved parent paths outside the temporary worktree.
-
-This prevents a repository-controlled symlink from redirecting writes into
-`.git`, the signing-key temporary directory, or other container paths.
+The write path rejects absolute paths, traversal through `..`, any `.git`
+component, existing symlinks in the target path, and resolved parents outside the
+temporary worktree.
 
 ## Abuse controls
 
-Write operations are limited by:
+Write operations are limited by `MAX_WRITES_PER_MINUTE`,
+`MAX_CONCURRENT_WRITES`, `MAX_CHANGES`, and `MAX_FILE_BYTES`.
 
-- `MAX_WRITES_PER_MINUTE`;
-- `MAX_CONCURRENT_WRITES`;
-- `MAX_CHANGES`;
-- `MAX_FILE_BYTES`.
-
-Audit logs record request ID, repository, branch, change count, resulting commit
-SHA, verification status, and outcome. They intentionally omit file contents,
-GitHub tokens, OpenBao credentials, tunnel keys, and signing keys.
+Audit logs intentionally omit file contents and credentials.
 
 ## What "only ChatGPT" means
 
-The server does not authenticate a language model as a cryptographic identity.
-Access is bound to the OpenAI tunnel and the private ChatGPT app/workspace that
-is allowed to use that tunnel.
+The MCP does not authenticate a particular language-model instance as a
+cryptographic identity. Access is bound to the OpenAI tunnel plus the private
+ChatGPT app/workspace permitted to use that tunnel.
 
-Therefore:
-
-- keep the ChatGPT app private;
-- grant Tunnels Read/Use only to the intended operator(s);
-- do not share the app;
-- do not expose the MCP container through Nginx, Docker ports, Cloudflare, or a
-  public load balancer.
-
-This is stronger than IP allowlisting, User-Agent checks, Origin checks, or a
-secret public URL.
+Keep the app private, grant tunnel Read/Use only to intended operators, and do
+not expose the MCP container through Nginx, Docker host ports, Cloudflare, or a
+public load balancer.
