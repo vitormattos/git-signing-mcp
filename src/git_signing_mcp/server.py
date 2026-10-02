@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 from .auth import TunnelAccessMiddleware
 from .config import Settings
 from .github import GitHubClient
-from .gitops import create_signed_commit
+from .gitops import OpenPGPKeyCache, RepositoryCache, create_signed_commit
 from .models import CommitRequest, CommitResult, VerificationResult
 from .secrets import SecretResolver
 from .security import (
@@ -35,6 +35,8 @@ settings = Settings.from_env()
 secrets = SecretResolver(settings)
 github = GitHubClient(settings, secrets.github_token())
 write_guard = WriteGuard(settings)
+repository_cache = RepositoryCache(settings.repo_cache_dir)
+openpgp_cache = OpenPGPKeyCache(settings.gpg_home_dir)
 mcp = MCPServer("git-signing-mcp")
 
 
@@ -107,7 +109,8 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
         request_id=request_id,
         repository=request.repository,
         branch=request.branch,
-        change_count=len(request.changes),
+        change_mode="patch" if request.patch is not None else "files",
+        change_count=None if request.patch is not None else len(request.changes),
     )
 
     try:
@@ -119,10 +122,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             current_head = github.branch_sha(request.repository, request.branch)
             branch_exists = current_head is not None
 
-            if (
-                request.expected_head_sha is not None
-                and current_head != request.expected_head_sha
-            ):
+            if request.expected_head_sha is not None and current_head != request.expected_head_sha:
                 raise ValueError("branch HEAD changed; refresh before writing")
 
             if not branch_exists:
@@ -130,17 +130,21 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
                 if base_head is None:
                     raise ValueError("base branch does not exist")
 
+            signing_key, signing_passphrase = secrets.signing_material()
             commit_sha = create_signed_commit(
                 settings=settings,
                 github_token=secrets.github_token(),
-                signing_key=secrets.signing_key(),
-                signing_passphrase=secrets.signing_passphrase(),
+                signing_key=signing_key,
+                signing_passphrase=signing_passphrase,
                 repository=request.repository,
                 branch=request.branch,
                 base_branch=request.base_branch,
                 branch_exists=branch_exists,
                 changes=request.changes,
+                patch=request.patch,
                 message=request.message,
+                repository_cache=repository_cache,
+                openpgp_cache=openpgp_cache,
             )
 
         result: VerificationResult | None = None
@@ -168,9 +172,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             commit_url=f"https://github.com/{request.repository}/commit/{commit_sha}",
             author_name=settings.git_identity_name,
             author_email=settings.git_identity_email,
-            dco_signed_off_by=(
-                f"{settings.git_identity_name} <{settings.git_identity_email}>"
-            ),
+            dco_signed_off_by=f"{settings.git_identity_name} <{settings.git_identity_email}>",
             cryptographic_verification=result.cryptographic_verification,
             verification_reason=result.verification_reason,
         )

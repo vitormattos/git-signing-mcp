@@ -34,7 +34,22 @@ class CommitRequest(BaseModel):
         description="Optional optimistic-lock SHA. The write is rejected if branch HEAD differs.",
     )
     message: str = Field(min_length=1, max_length=4096)
-    changes: list[FileChange] = Field(min_length=1, max_length=100)
+    changes: list[FileChange] = Field(default_factory=list, max_length=1000)
+    patch: str | None = Field(
+        default=None,
+        description=(
+            "Optional unified Git patch. Use either patch or changes, not both. "
+            "The patch is validated with git apply --check before it is applied."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_change_source(self) -> "CommitRequest":
+        has_changes = bool(self.changes)
+        has_patch = self.patch is not None and self.patch != ""
+        if has_changes == has_patch:
+            raise ValueError("provide exactly one of changes or patch")
+        return self
 
 
 class CommitResult(BaseModel):

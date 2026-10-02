@@ -43,6 +43,7 @@ class Settings:
     max_concurrent_writes: int
     max_file_bytes: int
     max_changes: int
+    max_patch_bytes: int
     git_identity_name: str
     git_identity_email: str
     signing_format: str
@@ -62,10 +63,13 @@ class Settings:
     openbao_signing_passphrase_field: str
     openbao_github_path: str
     openbao_github_field: str
+    secret_cache_ttl_seconds: int
+    repo_cache_dir: str
+    gpg_home_dir: str
     verify_retries: int
 
     @classmethod
-    def from_env(cls) -> Settings:
+    def from_env(cls) -> "Settings":
         settings = cls(
             host=os.getenv("MCP_HOST", "0.0.0.0"),
             port=_int("MCP_PORT", 8080),
@@ -77,14 +81,12 @@ class Settings:
                 "PROTECTED_BRANCH_PATTERNS",
                 "main,master,trunk,production,release/*",
             ),
-            allow_protected_branch_writes=_bool(
-                "ALLOW_PROTECTED_BRANCH_WRITES",
-                False,
-            ),
+            allow_protected_branch_writes=_bool("ALLOW_PROTECTED_BRANCH_WRITES", False),
             max_writes_per_minute=_int("MAX_WRITES_PER_MINUTE", 10),
             max_concurrent_writes=_int("MAX_CONCURRENT_WRITES", 1),
             max_file_bytes=_int("MAX_FILE_BYTES", 1_048_576),
             max_changes=_int("MAX_CHANGES", 100),
+            max_patch_bytes=_int("MAX_PATCH_BYTES", 5_242_880),
             git_identity_name=_read_value("GIT_IDENTITY_NAME", "") or "",
             git_identity_email=_read_value("GIT_IDENTITY_EMAIL", "") or "",
             signing_format=os.getenv("SIGNING_FORMAT", "ssh"),
@@ -106,6 +108,9 @@ class Settings:
             ),
             openbao_github_path=os.getenv("OPENBAO_GITHUB_PATH", "git-signing/github"),
             openbao_github_field=os.getenv("OPENBAO_GITHUB_FIELD", "token"),
+            secret_cache_ttl_seconds=_int("SECRET_CACHE_TTL_SECONDS", 300),
+            repo_cache_dir=os.getenv("REPO_CACHE_DIR", "/tmp/git-signing-mcp-repos"),
+            gpg_home_dir=os.getenv("GPG_HOME_DIR", "/tmp/git-signing-mcp-gnupg"),
             verify_retries=_int("VERIFY_RETRIES", 6),
         )
         settings.validate()
@@ -128,7 +133,11 @@ class Settings:
             raise RuntimeError("GITHUB_TOKEN_SOURCE must be 'env' or 'openbao'")
         if self.max_changes < 1 or self.max_changes > 1000:
             raise RuntimeError("MAX_CHANGES must be between 1 and 1000")
+        if self.max_patch_bytes < 1 or self.max_patch_bytes > 50 * 1024 * 1024:
+            raise RuntimeError("MAX_PATCH_BYTES must be between 1 byte and 50 MiB")
         if self.max_writes_per_minute < 1 or self.max_writes_per_minute > 600:
             raise RuntimeError("MAX_WRITES_PER_MINUTE must be between 1 and 600")
         if self.max_concurrent_writes < 1 or self.max_concurrent_writes > 16:
             raise RuntimeError("MAX_CONCURRENT_WRITES must be between 1 and 16")
+        if self.secret_cache_ttl_seconds < 0 or self.secret_cache_ttl_seconds > 86_400:
+            raise RuntimeError("SECRET_CACHE_TTL_SECONDS must be between 0 and 86400")

@@ -22,6 +22,9 @@ dev = [
   "ruff>=0.13,<1"
 ]
 
+[project.scripts]
+git-signing-gpg-wrapper = "git_signing_mcp.gpg_wrapper:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/git_signing_mcp"]
 

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 import re
-import shlex
 import shutil
 import stat
 import subprocess
 import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .config import Settings
@@ -18,11 +21,43 @@ from .security import validate_change_path
 
 logger = logging.getLogger(__name__)
 _SIGNOFF_RE = re.compile(r"^Signed-off-by:\s*.+$", re.IGNORECASE | re.MULTILINE)
+_SECRET_PATTERNS = (
+    re.compile(r"github_pat_[A-Za-z0-9_]+"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]+"),
+    re.compile(r"(?i)(Authorization:\s*(?:Basic|Bearer)\s+)[^\s]+"),
+    re.compile(r"(https://)[^/@\s]+@"),
+)
 
 
 def normalize_commit_message(message: str, name: str, email: str) -> str:
     cleaned = _SIGNOFF_RE.sub("", message).strip()
     return f"{cleaned}\n\nSigned-off-by: {name} <{email}>"
+
+
+def _redact(value: str) -> str:
+    result = value
+    for pattern in _SECRET_PATTERNS:
+        if pattern.pattern.startswith("(?i)(Authorization"):
+            result = pattern.sub(r"\1<redacted>", result)
+        elif pattern.pattern.startswith("(https://)"):
+            result = pattern.sub(r"\1<redacted>@", result)
+        else:
+            result = pattern.sub("<redacted>", result)
+    return result
+
+
+def _safe_args(args: list[str]) -> list[str]:
+    safe: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            safe.append("<redacted-message>")
+            redact_next = False
+            continue
+        safe.append(_redact(arg))
+        if arg in {"-m", "--message"}:
+            redact_next = True
+    return safe
 
 
 def _base_subprocess_env(home: Path) -> dict[str, str]:
@@ -70,12 +105,132 @@ def _run(
     )
     if process.returncode != 0:
         logger.error(
-            "subprocess failed: executable=%s returncode=%s",
+            "subprocess failed: executable=%s args=%r returncode=%s stderr=%r",
             Path(args[0]).name,
+            _safe_args(args),
             process.returncode,
+            _redact(process.stderr[-4000:]),
         )
         raise RuntimeError("Git operation failed")
     return process.stdout.strip()
+
+
+class RepositoryCache:
+    """Keep shallow bare repositories in tmpfs and seed per-request worktrees from them."""
+
+    def __init__(self, root: str) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _lock_for(self, repository: str) -> threading.Lock:
+        with self._locks_guard:
+            return self._locks.setdefault(repository, threading.Lock())
+
+    def _path_for(self, repository: str) -> Path:
+        digest = hashlib.sha256(repository.encode()).hexdigest()[:20]
+        return self.root / f"{digest}.git"
+
+    def checkout(
+        self,
+        *,
+        repository: str,
+        source_branch: str,
+        destination: Path,
+        env: dict[str, str],
+        auth_env: dict[str, str],
+    ) -> None:
+        cache = self._path_for(repository)
+        with self._lock_for(repository):
+            if not cache.exists():
+                cache.mkdir(mode=0o700)
+                _run(["git", "init", "--quiet", "--bare"], cache, env)
+                _run(
+                    ["git", "remote", "add", "origin", f"https://github.com/{repository}.git"],
+                    cache,
+                    env,
+                )
+            _run(
+                [
+                    "git",
+                    "fetch",
+                    "--quiet",
+                    "--prune",
+                    "--depth=1",
+                    "origin",
+                    f"+refs/heads/{source_branch}:refs/heads/__mcp_source",
+                ],
+                cache,
+                auth_env,
+            )
+            _run(
+                ["git", "clone", "--quiet", "--no-hardlinks", str(cache), str(destination)],
+                cache,
+                env,
+            )
+
+        _run(["git", "checkout", "--quiet", "-B", "work", "__mcp_source"], destination, env)
+        _run(
+            ["git", "remote", "set-url", "origin", f"https://github.com/{repository}.git"],
+            destination,
+            env,
+        )
+
+
+class OpenPGPKeyCache:
+    """Import an OpenPGP key once per key version into a reusable tmpfs GNUPGHOME."""
+
+    def __init__(self, root: str) -> None:
+        self.root = Path(root)
+        self._lock = threading.Lock()
+        self._key_digest: str | None = None
+        self._fingerprint: str | None = None
+
+    def _prepare(
+        self,
+        key_material: str,
+        env: dict[str, str],
+        cwd: Path,
+    ) -> tuple[dict[str, str], str]:
+        digest = hashlib.sha256(key_material.encode()).hexdigest()
+        if digest == self._key_digest and self._fingerprint and self.root.exists():
+            return env | {"GNUPGHOME": str(self.root)}, self._fingerprint
+
+        if self.root.exists():
+            shutil.rmtree(self.root)
+        self.root.mkdir(parents=True, mode=0o700)
+        key_path = self.root / "private.asc"
+        key_path.write_text(key_material, encoding="utf-8")
+        key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        gpg_env = env | {"GNUPGHOME": str(self.root)}
+        try:
+            _run(["gpg", "--batch", "--import", str(key_path)], cwd, gpg_env)
+        finally:
+            key_path.unlink(missing_ok=True)
+        listing = _run(
+            ["gpg", "--batch", "--with-colons", "--list-secret-keys"],
+            cwd,
+            gpg_env,
+        )
+        fingerprints = [
+            line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
+        ]
+        if not fingerprints:
+            raise RuntimeError("OpenPGP signing key is unusable")
+        self._key_digest = digest
+        self._fingerprint = fingerprints[0]
+        return gpg_env, fingerprints[0]
+
+    @contextmanager
+    def use(
+        self,
+        key_material: str,
+        env: dict[str, str],
+        cwd: Path,
+    ) -> Iterator[tuple[dict[str, str], str]]:
+        with self._lock:
+            yield self._prepare(key_material, env, cwd)
 
 
 def _configure_identity(repo: Path, env: dict[str, str], settings: Settings) -> None:
@@ -101,46 +256,68 @@ def _configure_ssh_signing(
 def _configure_openpgp_signing(
     repo: Path,
     env: dict[str, str],
-    key_material: str,
+    fingerprint: str,
     passphrase: str | None,
     secret_dir: Path,
 ) -> dict[str, str]:
-    gnupg_home = secret_dir / "gnupg"
-    gnupg_home.mkdir(mode=0o700)
-    key_path = secret_dir / "private.asc"
-    key_path.write_text(key_material, encoding="utf-8")
-    key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    gpg_env = env | {"GNUPGHOME": str(gnupg_home)}
-    _run(["gpg", "--batch", "--import", str(key_path)], repo, gpg_env)
-    listing = _run(
-        ["gpg", "--batch", "--with-colons", "--list-secret-keys"],
-        repo,
-        gpg_env,
-    )
-    fingerprints = [
-        line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
-    ]
-    if not fingerprints:
-        raise RuntimeError("OpenPGP signing key is unusable")
-    _run(["git", "config", "gpg.format", "openpgp"], repo, gpg_env)
-    _run(["git", "config", "user.signingkey", fingerprints[0]], repo, gpg_env)
+    _run(["git", "config", "gpg.format", "openpgp"], repo, env)
+    _run(["git", "config", "user.signingkey", fingerprint], repo, env)
 
-    if passphrase is not None:
-        passphrase_path = secret_dir / "openpgp_passphrase"
-        passphrase_path.write_text(passphrase, encoding="utf-8")
-        passphrase_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    if passphrase is None:
+        return env
 
-        wrapper_path = secret_dir / "gpg-wrapper"
-        wrapper_path.write_text(
-            "#!/bin/sh\n"
-            "exec gpg --batch --no-tty --pinentry-mode loopback "
-            f"--passphrase-file {shlex.quote(str(passphrase_path))} \"$@\"\n",
-            encoding="utf-8",
-        )
-        wrapper_path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-        _run(["git", "config", "gpg.program", str(wrapper_path)], repo, gpg_env)
+    passphrase_path = secret_dir / "openpgp_passphrase"
+    passphrase_path.write_text(passphrase, encoding="utf-8")
+    passphrase_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    wrapper = shutil.which("git-signing-gpg-wrapper", path=env.get("PATH"))
+    if not wrapper:
+        raise RuntimeError("git-signing-gpg-wrapper is not installed")
+    _run(["git", "config", "gpg.program", wrapper], repo, env)
+    return env | {"GIT_SIGNING_PASSPHRASE_FILE": str(passphrase_path)}
 
-    return gpg_env
+
+def _apply_file_changes(
+    repo: Path,
+    changes: list[FileChange],
+    settings: Settings,
+) -> None:
+    if len(changes) > settings.max_changes:
+        raise ValueError(f"too many changes; maximum is {settings.max_changes}")
+    for change in changes:
+        rel = validate_change_path(repo, change.path)
+        target = repo.joinpath(*rel.parts)
+        if change.operation == "delete":
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            continue
+
+        assert change.content is not None
+        encoded = change.content.encode("utf-8")
+        if len(encoded) > settings.max_file_bytes:
+            raise ValueError(f"{change.path} exceeds MAX_FILE_BYTES ({settings.max_file_bytes})")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encoded)
+
+
+def _apply_patch(repo: Path, env: dict[str, str], patch: str, settings: Settings) -> None:
+    encoded = patch.encode("utf-8")
+    if len(encoded) > settings.max_patch_bytes:
+        raise ValueError(f"patch exceeds MAX_PATCH_BYTES ({settings.max_patch_bytes})")
+    if "\x00" in patch:
+        raise ValueError("patch must be UTF-8 text without NUL bytes")
+
+    _run(["git", "apply", "--check", "-"], repo, env, input_text=patch)
+    _run(["git", "apply", "-"], repo, env, input_text=patch)
+
+    changed = _run(["git", "diff", "--name-only", "-z", "--no-renames", "HEAD"], repo, env)
+    paths = [path for path in changed.split("\x00") if path]
+    if len(paths) > settings.max_changes:
+        raise ValueError(f"patch changes too many files; maximum is {settings.max_changes}")
+    for path in paths:
+        validate_change_path(repo, path)
 
 
 def create_signed_commit(
@@ -154,64 +331,35 @@ def create_signed_commit(
     base_branch: str,
     branch_exists: bool,
     changes: list[FileChange],
+    patch: str | None,
     message: str,
+    repository_cache: RepositoryCache,
+    openpgp_cache: OpenPGPKeyCache,
 ) -> str:
-    if len(changes) > settings.max_changes:
-        raise ValueError(f"too many changes; maximum is {settings.max_changes}")
-
     with tempfile.TemporaryDirectory(prefix="git-signing-mcp-") as temp:
         root = Path(temp)
         repo = root / "repo"
         secret_dir = root / "secrets"
         process_home = root / "home"
-        repo.mkdir()
         secret_dir.mkdir(mode=0o700)
         process_home.mkdir(mode=0o700)
         env = _base_subprocess_env(process_home)
         git_auth_env = _git_auth_env(env, github_token)
 
-        _run(["git", "init", "--quiet"], repo, env)
-        _run(["git", "remote", "add", "origin", f"https://github.com/{repository}.git"], repo, env)
-
         source_branch = branch if branch_exists else base_branch
-        _run(
-            ["git", "fetch", "--quiet", "--depth=1", "origin", f"refs/heads/{source_branch}"],
-            repo,
-            git_auth_env,
+        repository_cache.checkout(
+            repository=repository,
+            source_branch=source_branch,
+            destination=repo,
+            env=env,
+            auth_env=git_auth_env,
         )
-        _run(["git", "checkout", "--quiet", "-B", "work", "FETCH_HEAD"], repo, env)
-
         _configure_identity(repo, env, settings)
-        if settings.signing_format == "ssh":
-            _configure_ssh_signing(repo, env, signing_key, secret_dir)
+
+        if patch is not None:
+            _apply_patch(repo, env, patch, settings)
         else:
-            env = _configure_openpgp_signing(
-                repo,
-                env,
-                signing_key,
-                signing_passphrase,
-                secret_dir,
-            )
-
-        for change in changes:
-            rel = validate_change_path(repo, change.path)
-            target = repo.joinpath(*rel.parts)
-            if change.operation == "delete":
-                if target.exists():
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-                continue
-
-            assert change.content is not None
-            encoded = change.content.encode("utf-8")
-            if len(encoded) > settings.max_file_bytes:
-                raise ValueError(
-                    f"{change.path} exceeds MAX_FILE_BYTES ({settings.max_file_bytes})"
-                )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(encoded)
+            _apply_file_changes(repo, changes, settings)
 
         _run(["git", "add", "--all"], repo, env)
         status = _run(["git", "status", "--porcelain"], repo, env)
@@ -223,9 +371,22 @@ def create_signed_commit(
             settings.git_identity_name,
             settings.git_identity_email,
         )
-        _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, env)
-        commit_sha = _run(["git", "rev-parse", "HEAD"], repo, env)
 
+        if settings.signing_format == "ssh":
+            _configure_ssh_signing(repo, env, signing_key, secret_dir)
+            _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, env)
+        else:
+            with openpgp_cache.use(signing_key, env, repo) as (gpg_env, fingerprint):
+                signing_env = _configure_openpgp_signing(
+                    repo,
+                    gpg_env,
+                    fingerprint,
+                    signing_passphrase,
+                    secret_dir,
+                )
+                _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, signing_env)
+
+        commit_sha = _run(["git", "rev-parse", "HEAD"], repo, env)
         raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
         if "\ngpgsig " not in f"\n{raw_commit}":
             raise RuntimeError("Git produced an unsigned commit")
