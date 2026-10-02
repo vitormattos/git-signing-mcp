@@ -9,23 +9,6 @@ no public URL, no published Docker port, and no reverse-proxy route.
 
 ## Deployment topology
 
-The main `docker-compose.yml` contains the MCP and OpenAI tunnel client. OpenBao
-may be external, or a VPS may run it locally by symlinking the tracked template:
-
-```bash
-ln -sfn docker-compose.openbao.yml docker-compose.override.yml
-mkdir -p volumes/openbao
-chown 100:100 volumes/openbao
-chmod 700 volumes/openbao
-```
-
-The override filename and `volumes/` are ignored by Git. Docker Compose loads
-the override automatically and OpenBao stores persistent data in
-`./volumes/openbao`. This keeps the base stack reusable while making the self-contained
-VPS deployment one normal `docker compose ...` command.
-
-## Security model
-
 ```text
 ChatGPT private custom app
         |
@@ -37,7 +20,7 @@ OpenAI tunnel control plane
         |
 tunnel-client
         |
-        | private Docker network
+        | private Docker network + shared secret
         v
 git-signing-mcp ------> OpenBao
         |
@@ -48,15 +31,23 @@ git-signing-mcp ------> OpenBao
 GitHub
 ```
 
-Nothing in the recommended deployment is attached to an Nginx/reverse-proxy
-network. Do not publish MCP or OpenBao ports.
+For a self-contained VPS deployment, enable the tracked local OpenBao override
+with a symlink:
+
+```bash
+ln -sfn docker-compose.openbao.yml docker-compose.override.yml
+install -d -m 700 -o 100 -g 100 volumes/openbao
+```
+
+The override filename, `secrets/`, `secrets-local/`, and `volumes/` are
+ignored by Git.
 
 ## What it provides
 
 - private Streamable HTTP MCP endpoint;
 - OpenAI Secure MCP Tunnel sidecar;
 - fixed server-side Git/DCO identity;
-- SSH and OpenPGP commit signing;
+- SSH and passphrase-protected OpenPGP commit signing;
 - GitHub verification after push;
 - repository and protected-branch policies;
 - no force pushes;
@@ -68,31 +59,22 @@ network. Do not publish MCP or OpenBao ports.
 - file-backed runtime secrets;
 - CI and Dependabot coverage.
 
-## Quick start
+## Start here
 
-```bash
-git clone git@github.com:vitormattos/git-signing-mcp.git
-cd git-signing-mcp
-cp .env.example .env
-install -d -m 700 secrets
+For a fresh VPS, follow:
 
-# Self-contained VPS only:
-cp docker-compose.openbao.yml docker-compose.override.yml
-```
-
-Do not start the complete stack until OpenBao has been initialized, unsealed, and
-contains the signing key and GitHub credential.
-
-Follow these documents in order:
-
-1. `docs/openbao.md`
-2. `docs/deployment.md`
-3. `docs/chatgpt.md`
+1. `docs/runbook.md` — complete end-to-end checklist;
+2. `docs/openbao.md` — OpenBao bootstrap and recovery details;
+3. `docs/deployment.md` — runtime/Compose operations;
+4. `docs/chatgpt.md` — private ChatGPT tunnel/app connection.
 
 Additional references:
 
-- `docs/security.md`
-- `docs/signing.md`
+- `docs/security.md`;
+- `docs/signing.md`.
+
+Do not start the complete stack until OpenBao has been initialized and unsealed
+and contains the signing key, optional OpenPGP passphrase, and GitHub credential.
 
 ## Local development
 

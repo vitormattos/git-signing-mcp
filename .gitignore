@@ -10,3 +10,4 @@ build/
 docker-compose.override.yml
 secrets/
 volumes/
+secrets-local/

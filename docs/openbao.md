@@ -1,103 +1,119 @@
 # OpenBao setup
 
-The MCP can use OpenBao for signing and GitHub credentials:
+The MCP uses OpenBao KV v2 for:
 
 - the GitHub credential;
 - the Git signing private key;
 - optionally, the OpenPGP private-key passphrase in the same signing secret.
 
-For a self-contained deployment, use the optional local OpenBao Compose override.
-The tracked template is `docker-compose.openbao.yml`; symlink it to the ignored
-`docker-compose.override.yml` on the VPS so future `git pull` updates are picked
-up automatically:
+This document describes the local single-node OpenBao topology.
+
+## 1. Enable the tracked local topology
 
 ```bash
 ln -sfn docker-compose.openbao.yml docker-compose.override.yml
-```
-
-Docker Compose will then load it automatically together with
-`docker-compose.yml`.
-
-The override adds a single-node OpenBao service on the private Docker network. It
-publishes no host port and uses persistent PebbleDB storage under
-`./volumes/openbao` on the host. OpenBao 2.7.x
-removed the old file backend; PebbleDB is the durable single-node backend used by
-this deployment.
-
-## Bootstrap the local OpenBao
-
-Create the host-backed data directory first. OpenBao runs as UID/GID 100 in the
-container, so make that directory writable by UID 100:
-
-```bash
 install -d -m 700 -o 100 -g 100 volumes/openbao
-```
-
-Start only OpenBao first. The bind-mounted HCL file is tracked by Git and owned
-by the host checkout user, while the container runs OpenBao as UID 100. The
-optional OpenBao ownership check is therefore deliberately left disabled; the
-configuration file contains no secrets and only needs to be readable by the
-container. Keep it mode 0644:
-
-```bash
 chmod 644 deploy/openbao/openbao.hcl
 chmod 755 deploy deploy/openbao
+```
 
+Do not enable `BAO_ENABLE_FILE_PERMISSIONS_CHECK` for this bind-mounted
+configuration. The HCL contains no secrets and is intentionally owned by the host
+checkout user while OpenBao runs as UID 100.
+
+OpenBao 2.7 uses PebbleDB here. Data persists under `./volumes/openbao`.
+
+## 2. Start and initialize once
+
+Start only OpenBao:
+
+```bash
 docker compose up -d openbao
 docker compose logs --tail=100 openbao
 ```
 
-Do not enable `BAO_ENABLE_FILE_PERMISSIONS_CHECK` for this bind-mounted
-configuration: when enabled, OpenBao requires the config file to be owned by its
-runtime UID (100), which conflicts with a normal Git checkout owned by the host
-administrator. The OpenBao documentation states this check is disabled by
-default.
-
-If you previously ran `umask 077` in the current shell, restore a normal umask
-before pulling or creating non-secret repository files:
+Initialize exactly once:
 
 ```bash
-umask 022
+docker compose exec openbao \
+  bao operator init \
+  -key-shares=3 \
+  -key-threshold=2
 ```
 
-Initialize it once:
+Store outside the VPS, preferably in a password manager:
 
-```bash
-docker compose exec openbao bao operator init -key-shares=3 -key-threshold=2
-```
+- OpenBao Unseal Key 1;
+- OpenBao Unseal Key 2;
+- OpenBao Unseal Key 3;
+- OpenBao Initial Root Token;
+- metadata noting threshold 2 of 3 and this VPS/service.
 
-Store the three unseal-key shares and the initial root token somewhere secure
-outside this VPS. Any two shares will be required to unseal.
+Do not paste any of these values into issue trackers, chats, or shell history.
 
-Unseal after initialization, and again after every OpenBao restart unless an
-auto-unseal mechanism is added later:
+## 3. Unseal
+
+Three shares exist, but the threshold is two. Use any two different shares:
 
 ```bash
 docker compose exec openbao bao operator unseal
 docker compose exec openbao bao operator unseal
 ```
 
-Each command prompts for one different unseal share.
+Confirm:
 
-Load the root token into the current shell only for bootstrap:
+```bash
+docker compose exec openbao bao status
+```
+
+Required:
+
+```text
+Initialized     true
+Sealed          false
+```
+
+Unseal is required again after every OpenBao restart until an auto-unseal
+mechanism is deliberately configured.
+
+## 4. Load the root token only for bootstrap
 
 ```bash
 read -rsp "OpenBao root token: " BAO_TOKEN
 echo
+test -n "$BAO_TOKEN" && echo "BAO_TOKEN loaded"
 ```
 
-Enable KV v2 and AppRole:
+Do not print the token.
+
+## 5. Enable KV v2 and AppRole
+
+These commands are idempotent only in the sense that an already-enabled mount
+should be detected rather than recreated. Inspect first when rerunning bootstrap:
 
 ```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao   bao secrets enable -path=secret -version=2 kv
-
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao   bao auth enable approle
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao bao secrets list
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao bao auth list
 ```
 
-Create the least-privilege MCP policy:
+If missing:
 
 ```bash
-docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao   bao policy write git-signing-mcp - <<'EOF'
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao secrets enable -path=secret -version=2 kv
+
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao auth enable approle
+```
+
+Expected mounts include `secret/` of type `kv` and `approle/` of type
+`approle`.
+
+## 6. Create the least-privilege policy
+
+```bash
+docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao policy write git-signing-mcp - <<'EOF'
 path "secret/data/git-signing/signing" {
   capabilities = ["read"]
 }
@@ -111,129 +127,197 @@ EOF
 Create the AppRole:
 
 ```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao   bao write auth/approle/role/git-signing-mcp   token_policies=git-signing-mcp   token_ttl=20m   token_max_ttl=1h   secret_id_ttl=0   secret_id_num_uses=0
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao write auth/approle/role/git-signing-mcp \
+  token_policies=git-signing-mcp \
+  token_ttl=20m \
+  token_max_ttl=1h \
+  secret_id_ttl=0 \
+  secret_id_num_uses=0
 ```
 
-The Secret ID is intentionally long-lived for this single-host service. Treat
-the file containing it as a sensitive machine credential and rotate it if the
-host is compromised.
+Verify without exposing credentials:
 
-## Store the signing key and GitHub token
+```bash
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao read auth/approle/role/git-signing-mcp
+```
 
-Generate a dedicated signing key in a private bootstrap directory and do not
-delete it until OpenBao confirms the private key was stored:
+The long-lived Secret ID is a machine credential. Rotate it if the host is
+compromised.
+
+## 7. Store a signing key
+
+A dedicated signing key is recommended. Reusing an existing personal OpenPGP key
+is supported, but it increases the impact of a VPS compromise because that host
+can then create signatures under the same personal key identity.
+
+### OpenPGP key exported from another machine
+
+Export the private key on the machine that already owns it:
+
+```bash
+gpg --armor --export-secret-keys <KEY_ID> > git-signing-mcp-private.asc
+chmod 600 git-signing-mcp-private.asc
+```
+
+Copy it to a private bootstrap directory on the VPS. `secrets-local/` is
+ignored by Git:
 
 ```bash
 install -d -m 700 secrets-local
-ssh-keygen -t ed25519 -C "git-signing-mcp"   -f ./secrets-local/git-signing-mcp-signing -N ""
+chmod 600 secrets-local/git-signing-mcp-private.asc
 ```
 
-Register the corresponding public key in GitHub as a signing key, then write the
-private key into OpenBao:
+Store it:
 
 ```bash
 docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
   bao kv put secret/git-signing/signing \
-  private_key=- < ./secrets-local/git-signing-mcp-signing
+  private_key=- < secrets-local/git-signing-mcp-private.asc
 ```
 
-For a passphrase-protected OpenPGP key, add the passphrase as a second field
-without exposing it in the shell history or process arguments:
+For a passphrase-protected OpenPGP key, preserve the existing `private_key`
+field and add only the passphrase:
 
 ```bash
 read -rsp "GPG passphrase: " GPG_PASSPHRASE
 echo
-
 printf '%s' "$GPG_PASSPHRASE" | \
   docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
   bao kv patch secret/git-signing/signing passphrase=-
-
 unset GPG_PASSPHRASE
 ```
 
-The MCP reads this field only when `SIGNING_FORMAT=openpgp`. The field name is
-configurable through `OPENBAO_SIGNING_PASSPHRASE_FIELD` and defaults to
-`passphrase`.
+The service reads `private_key` and, when `SIGNING_FORMAT=openpgp`, the
+optional `passphrase` field. It uses GPG loopback mode with a temporary
+mode-0600 passphrase file under the container's tmpfs; the passphrase is not put
+in process arguments or the long-running process environment.
 
-Write the fine-grained GitHub token without putting it into the repository:
+Validate without printing values:
+
+```bash
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv get -field=private_key secret/git-signing/signing >/dev/null \
+  && echo "private key OK"
+
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv get -field=passphrase secret/git-signing/signing >/dev/null \
+  && echo "passphrase OK"
+```
+
+Only after validation, remove the temporary export from the VPS and source
+machine.
+
+### SSH signing alternative
+
+Generate a dedicated Ed25519 key, register the public key in GitHub as a signing
+key, and store the private key in the same `private_key` field. Set
+`SIGNING_FORMAT=ssh`. Do not reuse an SSH login key.
+
+## 8. Create a fine-grained GitHub PAT
+
+Create a dedicated fine-grained PAT for the MCP:
+
+- token name: `git-signing-mcp`;
+- description: `Token dedicado ao git-signing-mcp para consultar repositórios e fazer push de commits assinados.`;
+- choose the correct resource owner for the repositories;
+- prefer `Only select repositories`;
+- expiration: use an explicit rotation period, for example 90 days;
+- repository permissions:
+  - Contents: Read and write;
+  - Metadata: Read-only;
+- leave unrelated permissions at No access.
+
+Store the PAT in a password manager.
+
+Write it to OpenBao without storing it in the repository:
 
 ```bash
 read -rsp "GitHub token: " GITHUB_TOKEN
 echo
 
-docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao   bao kv put secret/git-signing/github token="$GITHUB_TOKEN"
+docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv put secret/git-signing/github token="$GITHUB_TOKEN"
 
 unset GITHUB_TOKEN
 ```
 
-Validate both values without printing them:
+Validate:
 
 ```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv get -field=private_key secret/git-signing/signing >/dev/null \
-  && echo "signing key OK"
-
-# Required only for passphrase-protected OpenPGP keys:
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv get -field=passphrase secret/git-signing/signing >/dev/null \
-  && echo "passphrase OK"
-
 docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
   bao kv get -field=token secret/git-signing/github >/dev/null \
   && echo "github token OK"
 ```
 
-Only after both checks pass should the bootstrap private-key files be removed.
+## 9. Create the AppRole credential files
 
-## Create the AppRole credential files
-
-Obtain the Role ID and a Secret ID:
+Read the Role ID and generate one Secret ID:
 
 ```bash
 OPENBAO_ROLE_ID="$(
-  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao     bao read -field=role_id auth/approle/role/git-signing-mcp/role-id
+  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+    bao read -field=role_id auth/approle/role/git-signing-mcp/role-id
 )"
 
 OPENBAO_SECRET_ID="$(
-  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao     bao write -f -field=secret_id auth/approle/role/git-signing-mcp/secret-id
+  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+    bao write -f -field=secret_id auth/approle/role/git-signing-mcp/secret-id
 )"
 ```
 
-Store them in the file-backed Compose secrets expected by the MCP:
+Write them:
 
 ```bash
 install -d -m 700 secrets
-
 (
   umask 077
   printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
   printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
 )
-
-chmod 600 secrets/openbao_role_id secrets/openbao_secret_id
-
-unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID BAO_TOKEN
+unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID
 ```
 
-Using a subshell keeps the restrictive `umask 077` scoped to secret creation;
-it does not accidentally make later checked-out configuration files unreadable
-to non-root containers.
+The containers run as non-root users, so change only the individual files to
+read-only world-readable while keeping the parent directory inaccessible to
+ordinary host users:
+
+```bash
+chmod 700 secrets
+chmod 0444 secrets/openbao_role_id secrets/openbao_secret_id
+```
+
+Now remove the bootstrap root token from the shell:
+
+```bash
+unset BAO_TOKEN
+```
+
+Keep the root token only in the external password manager for recovery/bootstrap
+administration.
+
+## 10. Operational restart sequence
+
+After a host or OpenBao restart:
+
+```bash
+docker compose up -d openbao
+docker compose exec openbao bao status || true
+```
+
+If sealed, unseal twice with two distinct shares, then confirm `Sealed false`.
+
+The Compose healthcheck intentionally treats sealed OpenBao as unhealthy, and
+the MCP waits for `service_healthy`.
 
 ## Security notes
 
-The local OpenBao listener uses HTTP only inside the private Docker network and
-has no published host port. A compromised Docker host remains inside the trusted
-computing base.
-
-OpenBao 2.7 no longer supports `mlock`, so this deployment does not configure
-`disable_mlock` or grant `IPC_LOCK`. Keep swap disabled or encrypted on the VPS;
-`mem_swappiness: 0` is set on the OpenBao container as an additional safeguard.
-
-The OpenBao data volume is persistent and encrypted by OpenBao's barrier, but it
-still needs normal VPS backup and filesystem protection. Losing both the data
-volume and the unseal/root recovery material can make the secrets unrecoverable.
-
-Use a dedicated Git signing key for this service. Do not reuse an SSH login key.
-
-The GitHub credential should be fine-grained and grant only the repository scope
-and Contents permission required for Git fetch/push.
+- OpenBao listens on HTTP only inside the private Docker network and publishes no
+  host port.
+- The Docker host/root account remains part of the trusted computing base.
+- OpenBao 2.7 no longer supports `mlock`; keep swap disabled or encrypted.
+- Back up `volumes/openbao` and retain unseal material separately. Losing both
+  can make secrets unrecoverable.
+- The GitHub PAT and any reused personal GPG key materially increase the impact
+  of host compromise. Keep repository scope and app access narrow.

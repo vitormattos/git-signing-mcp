@@ -10,7 +10,6 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
 
 from .auth import TunnelAccessMiddleware
 from .config import Settings
@@ -194,6 +193,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
         raise RuntimeError(f"commit request {request_id} failed") from None
 
 
+@mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "git-signing-mcp"})
 
@@ -209,7 +209,6 @@ mcp_app = mcp.streamable_http_app(
     json_response=True,
     stateless_http=True,
     transport_security=transport_security,
-    custom_starlette_routes=[Route("/healthz", healthz, methods=["GET"])],
 )
 
 app = TunnelAccessMiddleware(mcp_app, settings.tunnel_shared_secret)

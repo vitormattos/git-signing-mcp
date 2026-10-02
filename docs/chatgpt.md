@@ -1,21 +1,68 @@
 # ChatGPT integration
 
 The production connection uses OpenAI Secure MCP Tunnel. The MCP server itself
-does not have a public URL.
+has no public URL and no published Docker port.
 
-## Connect
+## 1. Create the tunnel
 
-1. Create the tunnel in OpenAI Platform tunnel settings and associate it with
-   the intended ChatGPT workspace.
-2. Run this repository's Compose stack with the tunnel ID and runtime API key.
-3. Wait until tunnel-client is healthy and polling.
-4. In ChatGPT Plugins, create a developer-mode app.
-5. Choose **Tunnel** as the connection type.
-6. Select the tunnel or paste its tunnel ID.
-7. Keep the app private; do not publish or share it.
-8. Scan the tools.
-9. Test get_identity and verify_commit.
-10. Then test one commit to a disposable feature branch.
+In OpenAI Platform organization settings, create a Secure MCP Tunnel:
+
+- name: `git-signing-mcp`;
+- associate it only with the intended ChatGPT workspace;
+- keep the tunnel private to the intended workspace context.
+
+Record the tunnel ID (`tunnel_...`).
+
+## 2. Create the runtime API key
+
+Create a dedicated service-account API key for the tunnel client:
+
+- name: `git-signing-mcp-tunnel-runtime`;
+- use restricted permissions;
+- grant only tunnel Read + Use;
+- do not use an Admin key;
+- use an explicit expiration/rotation period;
+- save the key in a password manager.
+
+Write it to `secrets/openai_tunnel_runtime_api_key` as described in
+`docs/deployment.md`.
+
+## 3. Start the VPS stack
+
+OpenBao must be unsealed first. Then start `mcp` and `tunnel-client` and wait
+for the MCP to report healthy:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 mcp
+docker compose logs --tail=100 tunnel-client
+```
+
+## 4. Create the private ChatGPT app
+
+In the ChatGPT workspace:
+
+1. enable developer mode if required;
+2. create a custom/private MCP app;
+3. choose **Tunnel** as the connection type;
+4. select the `git-signing-mcp` tunnel or paste its tunnel ID;
+5. keep the app private;
+6. do not publish or share it to the workspace;
+7. scan the tools.
+
+This service has access to a personal Git signing identity. Treat app access as
+the ability to request signatures within the MCP's repository/branch policy.
+
+## 5. Validate in ChatGPT
+
+Test in this order:
+
+1. `get_identity` — confirm the fixed name, email, and `openpgp` format;
+2. `verify_commit` — verify a known commit;
+3. `create_signed_git_commit` — create one commit on a disposable feature
+   branch, never on a protected branch;
+4. confirm GitHub reports the commit signature as Verified;
+5. confirm Author and `Signed-off-by` use the configured identity.
 
 ## Recommended workflow
 
@@ -38,17 +85,12 @@ verify_commit
 open/update PR with the normal GitHub connector
 ```
 
-The MCP does not replace the complete GitHub connector. It owns only the
+The signing MCP does not replace the full GitHub connector. It owns only the
 security-sensitive commit creation path.
 
-## Skill package
+## Private-use requirement
 
-The optional plugin package in this repository contains the workflow skill only.
-The tunnel-backed MCP connection is created in ChatGPT separately because a
-private tunnel does not use a public `mcp.json` URL.
-
-Build the optional skill package with:
-
-```bash
-python scripts/build_plugin.py
-```
+For a personal GPG key, do not publish the custom app to the workspace. If the
+workspace later changes ownership, membership, or app policy, re-check that only
+the intended user can invoke the app before continuing to use the signing
+service.
