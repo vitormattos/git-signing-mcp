@@ -10,14 +10,18 @@ no public URL, no published Docker port, and no reverse-proxy route.
 ## Deployment topology
 
 The main `docker-compose.yml` contains the MCP and OpenAI tunnel client. OpenBao
-may be external, or a VPS may run it locally by copying the tracked template:
+may be external, or a VPS may run it locally by symlinking the tracked template:
 
 ```bash
-cp docker-compose.openbao.yml docker-compose.override.yml
+ln -sfn docker-compose.openbao.yml docker-compose.override.yml
+mkdir -p volumes/openbao
+chown 100:100 volumes/openbao
+chmod 700 volumes/openbao
 ```
 
-The override filename is ignored by Git and Docker Compose loads it
-automatically. This keeps the base stack reusable while making the self-contained
+The override filename and `volumes/` are ignored by Git. Docker Compose loads
+the override automatically and OpenBao stores persistent data in
+`./volumes/openbao`. This keeps the base stack reusable while making the self-contained
 VPS deployment one normal `docker compose ...` command.
 
 ## Security model
