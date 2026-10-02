@@ -1,9 +1,10 @@
 # OpenBao setup
 
-The MCP can use OpenBao for two secrets:
+The MCP can use OpenBao for signing and GitHub credentials:
 
 - the GitHub credential;
-- the Git signing private key.
+- the Git signing private key;
+- optionally, the OpenPGP private-key passphrase in the same signing secret.
 
 For a self-contained deployment, use the optional local OpenBao Compose override.
 The tracked template is `docker-compose.openbao.yml`; symlink it to the ignored
@@ -127,12 +128,32 @@ install -d -m 700 secrets-local
 ssh-keygen -t ed25519 -C "git-signing-mcp"   -f ./secrets-local/git-signing-mcp-signing -N ""
 ```
 
-Register the public key in GitHub as a signing key, then write the private key
-into OpenBao:
+Register the corresponding public key in GitHub as a signing key, then write the
+private key into OpenBao:
 
 ```bash
-docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao   bao kv put secret/git-signing/signing   private_key=- < ./secrets-local/git-signing-mcp-signing
+docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv put secret/git-signing/signing \
+  private_key=- < ./secrets-local/git-signing-mcp-signing
 ```
+
+For a passphrase-protected OpenPGP key, add the passphrase as a second field
+without exposing it in the shell history or process arguments:
+
+```bash
+read -rsp "GPG passphrase: " GPG_PASSPHRASE
+echo
+
+printf '%s' "$GPG_PASSPHRASE" | \
+  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv patch secret/git-signing/signing passphrase=-
+
+unset GPG_PASSPHRASE
+```
+
+The MCP reads this field only when `SIGNING_FORMAT=openpgp`. The field name is
+configurable through `OPENBAO_SIGNING_PASSPHRASE_FIELD` and defaults to
+`passphrase`.
 
 Write the fine-grained GitHub token without putting it into the repository:
 
@@ -148,9 +169,18 @@ unset GITHUB_TOKEN
 Validate both values without printing them:
 
 ```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao   bao kv get -field=private_key secret/git-signing/signing >/dev/null   && echo "signing key OK"
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv get -field=private_key secret/git-signing/signing >/dev/null \
+  && echo "signing key OK"
 
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao   bao kv get -field=token secret/git-signing/github >/dev/null   && echo "github token OK"
+# Required only for passphrase-protected OpenPGP keys:
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv get -field=passphrase secret/git-signing/signing >/dev/null \
+  && echo "passphrase OK"
+
+docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
+  bao kv get -field=token secret/git-signing/github >/dev/null \
+  && echo "github token OK"
 ```
 
 Only after both checks pass should the bootstrap private-key files be removed.

@@ -4,6 +4,7 @@ import base64
 import logging
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -101,6 +102,7 @@ def _configure_openpgp_signing(
     repo: Path,
     env: dict[str, str],
     key_material: str,
+    passphrase: str | None,
     secret_dir: Path,
 ) -> dict[str, str]:
     gnupg_home = secret_dir / "gnupg"
@@ -122,6 +124,22 @@ def _configure_openpgp_signing(
         raise RuntimeError("OpenPGP signing key is unusable")
     _run(["git", "config", "gpg.format", "openpgp"], repo, gpg_env)
     _run(["git", "config", "user.signingkey", fingerprints[0]], repo, gpg_env)
+
+    if passphrase is not None:
+        passphrase_path = secret_dir / "openpgp_passphrase"
+        passphrase_path.write_text(passphrase, encoding="utf-8")
+        passphrase_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+        wrapper_path = secret_dir / "gpg-wrapper"
+        wrapper_path.write_text(
+            "#!/bin/sh\n"
+            "exec gpg --batch --no-tty --pinentry-mode loopback "
+            f"--passphrase-file {shlex.quote(str(passphrase_path))} \"$@\"\n",
+            encoding="utf-8",
+        )
+        wrapper_path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        _run(["git", "config", "gpg.program", str(wrapper_path)], repo, gpg_env)
+
     return gpg_env
 
 
@@ -130,6 +148,7 @@ def create_signed_commit(
     settings: Settings,
     github_token: str,
     signing_key: str,
+    signing_passphrase: str | None,
     repository: str,
     branch: str,
     base_branch: str,
@@ -166,7 +185,13 @@ def create_signed_commit(
         if settings.signing_format == "ssh":
             _configure_ssh_signing(repo, env, signing_key, secret_dir)
         else:
-            env = _configure_openpgp_signing(repo, env, signing_key, secret_dir)
+            env = _configure_openpgp_signing(
+                repo,
+                env,
+                signing_key,
+                signing_passphrase,
+                secret_dir,
+            )
 
         for change in changes:
             rel = validate_change_path(repo, change.path)

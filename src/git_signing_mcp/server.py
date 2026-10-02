@@ -135,6 +135,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
                 settings=settings,
                 github_token=secrets.github_token(),
                 signing_key=secrets.signing_key(),
+                signing_passphrase=secrets.signing_passphrase(),
                 repository=request.repository,
                 branch=request.branch,
                 base_branch=request.base_branch,
