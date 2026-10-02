@@ -59,6 +59,7 @@ class Settings:
     openbao_kv_mount: str
     openbao_signing_path: str
     openbao_signing_field: str
+    openbao_signing_passphrase_field: str
     openbao_github_path: str
     openbao_github_field: str
     verify_retries: int
@@ -100,6 +101,9 @@ class Settings:
             openbao_kv_mount=os.getenv("OPENBAO_KV_MOUNT", "secret"),
             openbao_signing_path=os.getenv("OPENBAO_SIGNING_PATH", "git-signing/signing"),
             openbao_signing_field=os.getenv("OPENBAO_SIGNING_FIELD", "private_key"),
+            openbao_signing_passphrase_field=os.getenv(
+                "OPENBAO_SIGNING_PASSPHRASE_FIELD", "passphrase"
+            ),
             openbao_github_path=os.getenv("OPENBAO_GITHUB_PATH", "git-signing/github"),
             openbao_github_field=os.getenv("OPENBAO_GITHUB_FIELD", "token"),
             verify_retries=_int("VERIFY_RETRIES", 6),
