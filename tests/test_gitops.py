@@ -158,5 +158,11 @@ def test_repository_cache_initializes_once(tmp_path: Path, monkeypatch):
 
     init_calls = [call for call in calls if call[:4] == ["git", "init", "--quiet", "--bare"]]
     fetch_calls = [call for call in calls if call[:2] == ["git", "fetch"]]
+    clone_calls = [call for call in calls if call[:2] == ["git", "clone"]]
     assert len(init_calls) == 1
     assert len(fetch_calls) == 2
+    assert len(clone_calls) == 2
+    assert all(
+        ["--branch", "__mcp_source"] == call[4:6]
+        for call in clone_calls
+    )
