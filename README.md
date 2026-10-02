@@ -5,9 +5,20 @@ a matching DCO Signed-off-by trailer, and an SSH or OpenPGP cryptographic
 signature.
 
 The production deployment uses **OpenAI Secure MCP Tunnel**. The MCP server has
-no public URL, no published Docker port, and no reverse-proxy route. ChatGPT
-reaches it through an outbound-only tunnel started from the same private Compose
-network.
+no public URL, no published Docker port, and no reverse-proxy route.
+
+## Deployment topology
+
+The main `docker-compose.yml` contains the MCP and OpenAI tunnel client. OpenBao
+may be external, or a VPS may run it locally by copying the tracked template:
+
+```bash
+cp docker-compose.openbao.yml docker-compose.override.yml
+```
+
+The override filename is ignored by Git and Docker Compose loads it
+automatically. This keeps the base stack reusable while making the self-contained
+VPS deployment one normal `docker compose ...` command.
 
 ## Security model
 
@@ -20,55 +31,38 @@ OpenAI tunnel control plane
         ^
         | outbound HTTPS only
         |
-tunnel-client container
+tunnel-client
         |
-        | private Docker network + local shared secret
+        | private Docker network
         v
-git-signing-mcp
+git-signing-mcp ------> OpenBao
         |
-        +--> repository policy
-        +--> protected-branch policy
-        +--> rate/concurrency limits
+        +--> repository/branch policy
         +--> DCO normalization
-        +--> OpenBao/file signing key
-        +--> OpenBao/env GitHub token
+        +--> signed Git commit
         v
 GitHub
 ```
 
 Nothing in the recommended deployment is attached to an Nginx/reverse-proxy
-network. Do not publish port 8080.
+network. Do not publish MCP or OpenBao ports.
 
 ## What it provides
 
-- Streamable HTTP MCP endpoint reachable only inside the Compose network.
-- Official OpenAI tunnel-client sidecar pinned to a release.
-- A local secret on the tunnel-client -> MCP hop as defense in depth.
-- create_signed_git_commit, get_identity, and verify_commit tools.
-- Fixed server-side author identity; callers cannot choose another signer.
-- Automatic DCO trailer matching the actual commit author.
-- SSH and OpenPGP commit signing with Git.
-- GitHub-side verification after push.
-- Configurable repository allowlist; `*/*` is supported.
-- Protected-branch denylist, disabled direct writes by default.
-- Optimistic branch HEAD check and no force pushes.
-- Symlink/path escape protection for repository writes.
-- Write rate limits and concurrency limits.
-- Structured audit events without file contents or secrets.
-- OpenBao AppRole + KV v2 support for signing key and GitHub token.
-- Docker/Compose deployment, tests, CI, and Dependabot.
-
-## What it deliberately does not provide
-
-- A public MCP endpoint.
-- Nginx/reverse-proxy integration in the secure deployment.
-- A replacement for the full GitHub connector.
-- Arbitrary signer identity supplied by the model.
-- Force pushes.
-- Direct writes to protected branches unless explicitly enabled.
-- Binary file editing in the MCP tool.
-- Interactive OpenPGP passphrase prompts.
-- Long-term application state.
+- private Streamable HTTP MCP endpoint;
+- OpenAI Secure MCP Tunnel sidecar;
+- fixed server-side Git/DCO identity;
+- SSH and OpenPGP commit signing;
+- GitHub verification after push;
+- repository and protected-branch policies;
+- no force pushes;
+- path/symlink protections;
+- rate and concurrency limits;
+- structured audit events without secret contents;
+- OpenBao AppRole + KV v2 integration;
+- optional local single-node OpenBao deployment with persistent PebbleDB;
+- file-backed runtime secrets;
+- CI and Dependabot coverage.
 
 ## Quick start
 
@@ -76,27 +70,25 @@ network. Do not publish port 8080.
 git clone git@github.com:vitormattos/git-signing-mcp.git
 cd git-signing-mcp
 cp .env.example .env
+install -d -m 700 secrets
 
-mkdir -p secrets
-openssl rand -hex 32
-# put the generated value in MCP_TUNNEL_SHARED_SECRET in .env
-
-docker compose up -d --build
-docker compose ps
+# Self-contained VPS only:
+cp docker-compose.openbao.yml docker-compose.override.yml
 ```
 
-Before starting, create a Secure MCP Tunnel in the OpenAI Platform and configure
-`OPENAI_TUNNEL_ID` and `OPENAI_TUNNEL_RUNTIME_API_KEY`.
+Do not start the complete stack until OpenBao has been initialized, unsealed, and
+contains the signing key and GitHub credential.
 
-Do **not** create a DNS record or reverse-proxy host for this service.
+Follow these documents in order:
 
-See:
+1. `docs/openbao.md`
+2. `docs/deployment.md`
+3. `docs/chatgpt.md`
 
-- docs/deployment.md
-- docs/security.md
-- docs/openbao.md
-- docs/signing.md
-- docs/chatgpt.md
+Additional references:
+
+- `docs/security.md`
+- `docs/signing.md`
 
 ## Local development
 

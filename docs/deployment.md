@@ -1,18 +1,6 @@
 # Deployment
 
-## 1. Create the OpenAI Secure MCP Tunnel
-
-Create a Secure MCP Tunnel for the target OpenAI organization/workspace and obtain:
-
-- the tunnel ID;
-- a runtime API key with only Tunnels Read + Use.
-
-Do not use an admin key for the long-running tunnel client.
-
-The tunnel client needs outbound HTTPS access to api.openai.com:443. No inbound
-firewall port is required for the MCP service.
-
-## 2. Clone and configure
+## 1. Clone and select the OpenBao topology
 
 ```bash
 git clone git@github.com:vitormattos/git-signing-mcp.git
@@ -21,58 +9,100 @@ cp .env.example .env
 install -d -m 700 secrets
 ```
 
-The `.env` file is still a file on disk, but Docker Compose uses values from it
-for variable substitution. If a substituted value is placed under a service's
-`environment:` section, that value becomes a container environment variable.
+For a self-contained VPS deployment, enable the tracked local OpenBao template:
 
-For that reason, production secrets are stored as files and mounted through
-Docker Compose secrets instead of being placed directly in `.env`.
+```bash
+cp docker-compose.openbao.yml docker-compose.override.yml
+```
 
-Create the secret files:
+`docker-compose.override.yml` is intentionally ignored by Git and is loaded
+automatically by Docker Compose. The main Compose file therefore remains usable
+with an external OpenBao, while a VPS can opt into the local stateful service
+without having to remember multiple `-f` arguments.
+
+Bootstrap OpenBao before starting the MCP. Follow `docs/openbao.md` completely,
+including initialization, unseal, policy/AppRole creation, and storing the Git
+signing key and GitHub token.
+
+## 2. Create the file-backed deployment secrets
+
+The `.env` file is a Compose variable file. Values interpolated into a service's
+`environment:` section become process environment variables. Production secret
+values therefore live in files instead.
+
+After the OpenBao bootstrap has produced the AppRole credentials:
 
 ```bash
 umask 077
 
-printf '%s' "$OPENAI_TUNNEL_RUNTIME_API_KEY" \
-  > secrets/openai_tunnel_runtime_api_key
+printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
+printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
 
-openssl rand -hex 32 \
-  > secrets/mcp_tunnel_shared_secret
-
-printf '%s' "$OPENBAO_ROLE_ID" \
-  > secrets/openbao_role_id
-
-printf '%s' "$OPENBAO_SECRET_ID" \
-  > secrets/openbao_secret_id
+openssl rand -hex 32 > secrets/mcp_tunnel_shared_secret
 
 chmod 600 secrets/*
+unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID
 ```
 
-Then remove the secret values from the current shell:
+The OpenAI tunnel runtime key is added later as:
+
+```text
+secrets/openai_tunnel_runtime_api_key
+```
+
+The default paths are already present in `.env.example`.
+
+## 3. Configure non-secret values
+
+At minimum configure in `.env`:
+
+```text
+OPENAI_TUNNEL_ID=
+ALLOWED_REPOSITORIES=*/*
+GIT_IDENTITY_NAME=Vitor Mattos
+GIT_IDENTITY_EMAIL=1079143+vitormattos@users.noreply.github.com
+SIGNING_FORMAT=ssh
+SIGNING_KEY_SOURCE=openbao
+GITHUB_TOKEN_SOURCE=openbao
+```
+
+When the local OpenBao override is enabled, it overrides `OPENBAO_ADDR` to
+`http://openbao:8200` inside the private Compose network.
+
+## 4. Create the OpenAI Secure MCP Tunnel
+
+Create a Secure MCP Tunnel for the intended OpenAI organization/workspace and
+obtain:
+
+- the tunnel ID;
+- a runtime API key with only the permissions required to use that tunnel.
+
+Do not use an admin key as the long-lived runtime credential.
+
+Write the runtime key to its secret file:
 
 ```bash
-unset OPENAI_TUNNEL_RUNTIME_API_KEY OPENBAO_ROLE_ID OPENBAO_SECRET_ID
+umask 077
+read -rsp "OpenAI tunnel runtime API key: " OPENAI_TUNNEL_RUNTIME_API_KEY
+echo
+printf '%s' "$OPENAI_TUNNEL_RUNTIME_API_KEY"   > secrets/openai_tunnel_runtime_api_key
+chmod 600 secrets/openai_tunnel_runtime_api_key
+unset OPENAI_TUNNEL_RUNTIME_API_KEY
 ```
 
-Configure non-secret values in `.env`, especially:
+Put only the tunnel ID in `.env`.
 
-- OPENAI_TUNNEL_ID
-- ALLOWED_REPOSITORIES
-- GIT_IDENTITY_NAME
-- GIT_IDENTITY_EMAIL
-- OPENBAO_ADDR
-- OpenBao KV paths
+The tunnel client needs outbound HTTPS access to OpenAI. No inbound MCP firewall
+port is required.
 
-The default secret file paths are already present in `.env.example`.
+## 5. Do not configure Nginx
 
-## 3. Do not configure Nginx
+There is intentionally no public MCP endpoint.
 
-There is intentionally no reverse-proxy override and no public MCP endpoint.
+Do not publish the MCP, tunnel-client, or OpenBao ports and do not attach them to
+an Nginx/Traefik/Cloudflare proxy network.
 
-Do not add a host port and do not attach the MCP container to your
-Nginx/Traefik/Cloudflare proxy network.
-
-## 4. Validate configuration
+## 6. Validate
 
 ```bash
 docker compose config --quiet
@@ -81,45 +111,47 @@ docker compose config | grep -n "published:"
 
 The second command should print nothing.
 
-## 5. Start
+If the local OpenBao override is enabled:
 
 ```bash
-docker compose pull tunnel-client
-docker compose up -d --build
-docker compose ps
-docker compose logs -f tunnel-client
+docker compose ps openbao
+docker compose exec openbao bao status
 ```
 
-The MCP container health check runs internally. The tunnel client waits for the
-MCP health check before starting.
+OpenBao must report `Initialized true` and `Sealed false` before the first MCP
+write.
 
-## 6. Connect ChatGPT
+## 7. Start
+
+```bash
+docker compose pull
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 mcp
+docker compose logs --tail=100 tunnel-client
+```
+
+The MCP health check runs internally. The tunnel client waits for the MCP health
+check before starting.
+
+## 8. Connect ChatGPT
 
 Create a private developer-mode custom app and choose Tunnel as the connection
 type. Select the configured tunnel or paste its tunnel ID.
 
-Do not publish or share the app with users who should not be able to create
-signed commits.
+Keep the app private. After connecting, test `get_identity` and
+`verify_commit` before the first write, then create one commit on a disposable
+feature branch.
 
-After connecting, test get_identity and verify_commit before the first write.
-
-## 7. Repository scope
-
-```text
-ALLOWED_REPOSITORIES=*/*
-```
-
-allows any repository reachable by the configured GitHub credential. Narrow it
-at any time without changing the tunnel setup.
-
-## 8. Updating
+## 9. Updating
 
 ```bash
 git pull --ff-only
-docker compose pull tunnel-client
+docker compose pull
 docker compose up -d --build
 ```
 
-The Python base image and OpenAI tunnel-client image are both pinned by digest.
-Dependabot is configured for Docker and Docker Compose so image changes arrive
-as explicit pull requests instead of changing silently.
+The main runtime images are pinned by digest. Dependabot monitors Python,
+GitHub Actions, Dockerfile, and Docker Compose dependencies. The optional
+OpenBao Compose template is versioned so its image version is also visible to
+dependency tooling.

@@ -1,0 +1,39 @@
+# Optional local OpenBao service.
+# Copy this file to docker-compose.override.yml on hosts that should run
+# OpenBao beside the MCP. docker-compose.override.yml is intentionally ignored.
+
+services:
+  openbao:
+    image: openbao/openbao:2.7.1
+    restart: unless-stopped
+    command:
+      - server
+      - -config=/openbao/config/openbao.hcl
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_ENABLE_FILE_PERMISSIONS_CHECK: "true"
+    volumes:
+      - ./deploy/openbao/openbao.hcl:/openbao/config/openbao.hcl:ro
+      - openbao-data:/openbao/file
+    networks:
+      - private
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - no-new-privileges:true
+    mem_swappiness: 0
+
+  mcp:
+    depends_on:
+      openbao:
+        condition: service_started
+    environment:
+      OPENBAO_ADDR: http://openbao:8200
+
+volumes:
+  openbao-data:
