@@ -12,13 +12,13 @@ dependencies = [
   "httpx>=0.28,<1",
   "mcp>=2,<3",
   "pydantic>=2.12,<3",
-  "starlette>=0.48,<1",
+  "starlette>=0.48,<2",
   "uvicorn>=0.37,<1"
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8,<9",
+  "pytest>=8,<10",
   "ruff>=0.13,<1"
 ]
 
