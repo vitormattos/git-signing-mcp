@@ -112,6 +112,12 @@ OPENBAO_SIGNING_FIELD=private_key
 OPENBAO_SIGNING_PASSPHRASE_FIELD=passphrase
 OPENBAO_GITHUB_PATH=git-signing/github
 OPENBAO_GITHUB_FIELD=token
+
+# Performance/ergonomics
+SECRET_CACHE_TTL_SECONDS=300
+MAX_PATCH_BYTES=5242880
+REPO_CACHE_DIR=/tmp/git-signing-mcp-repos
+GPG_HOME_DIR=/tmp/git-signing-mcp-gnupg
 ```
 
 Prefer an explicit `ALLOWED_REPOSITORIES` allow-list. `*/*` delegates the
@@ -120,6 +126,13 @@ needed for a personal signing service.
 
 The local OpenBao override also forces the MCP's effective `OPENBAO_ADDR` to
 `http://openbao:8200`.
+
+The secret, repository, and OpenPGP caches live only in the MCP process/container.
+The default 300-second secret cache can be disabled with
+`SECRET_CACHE_TTL_SECONDS=0`. The repository and GPG directories are under the
+MCP's `/tmp` tmpfs by default and therefore disappear when the container is
+recreated. `MAX_PATCH_BYTES` limits the optional unified-patch input accepted by
+`create_signed_git_commit`.
 
 ## 5. Create the OpenAI Secure MCP Tunnel
 

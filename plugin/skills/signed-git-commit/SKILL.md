@@ -18,7 +18,10 @@ commit.
 4. Prefer a feature branch. The server denies configured protected branches by
    default and never force-pushes.
 5. Call create_signed_git_commit with the repository, branch, expected HEAD SHA
-   when known, commit message, and exact file changes.
+   when known, commit message, and exactly one change source:
+   - use `patch` when you already have a unified Git diff; this avoids fetching
+     and resending complete file contents;
+   - use `changes` for small direct upserts/deletes or when no patch exists.
 6. Do not add a Signed-off-by identity yourself. The server appends the DCO
    trailer so it matches the actual commit author.
 7. Check the returned cryptographic verification. Call verify_commit when a
