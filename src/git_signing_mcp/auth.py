@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Awaitable, Callable
-
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
