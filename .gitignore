@@ -9,3 +9,4 @@ build/
 *.egg-info/
 docker-compose.override.yml
 secrets/
+volumes/
