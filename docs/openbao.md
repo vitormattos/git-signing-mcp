@@ -23,11 +23,23 @@ this deployment.
 
 ## Bootstrap the local OpenBao
 
-Start only OpenBao first:
+Start only OpenBao first. The OpenBao image runs as a non-root `openbao` user,
+so the bind-mounted HCL file must be readable by that user. The configuration
+file is not a secret and should be mode 0644:
 
 ```bash
+chmod 644 deploy/openbao/openbao.hcl
+chmod 755 deploy deploy/openbao
+
 docker compose up -d openbao
 docker compose logs --tail=100 openbao
+```
+
+If you previously ran `umask 077` in the current shell, restore a normal umask
+before pulling or creating non-secret repository files:
+
+```bash
+umask 022
 ```
 
 Initialize it once:
@@ -144,9 +156,41 @@ Store them in the file-backed Compose secrets expected by the MCP:
 
 ```bash
 install -d -m 700 secrets
-umask 077
 
-printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
+(
+  umask 077
+  printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
+  printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
+)
+
+chmod 600 secrets/openbao_role_id secrets/openbao_secret_id
+
+unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID BAO_TOKEN
+```
+
+Using a subshell keeps the restrictive `umask 077` scoped to secret creation;
+it does not accidentally make later checked-out configuration files unreadable
+to non-root containers.
+
+## Security notes
+
+The local OpenBao listener uses HTTP only inside the private Docker network and
+has no published host port. A compromised Docker host remains inside the trusted
+computing base.
+
+OpenBao 2.7 no longer supports `mlock`, so this deployment does not configure
+`disable_mlock` or grant `IPC_LOCK`. Keep swap disabled or encrypted on the VPS;
+`mem_swappiness: 0` is set on the OpenBao container as an additional safeguard.
+
+The OpenBao data volume is persistent and encrypted by OpenBao's barrier, but it
+still needs normal VPS backup and filesystem protection. Losing both the data
+volume and the unseal/root recovery material can make the secrets unrecoverable.
+
+Use a dedicated Git signing key for this service. Do not reuse an SSH login key.
+
+The GitHub credential should be fine-grained and grant only the repository scope
+and Contents permission required for Git fetch/push.
+
 printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
 chmod 600 secrets/openbao_role_id secrets/openbao_secret_id
 
