@@ -190,28 +190,3 @@ Use a dedicated Git signing key for this service. Do not reuse an SSH login key.
 
 The GitHub credential should be fine-grained and grant only the repository scope
 and Contents permission required for Git fetch/push.
-
-printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
-chmod 600 secrets/openbao_role_id secrets/openbao_secret_id
-
-unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID BAO_TOKEN
-```
-
-## Security notes
-
-The local OpenBao listener uses HTTP only inside the private Docker network and
-has no published host port. A compromised Docker host remains inside the trusted
-computing base.
-
-OpenBao 2.7 no longer supports `mlock`, so this deployment does not configure
-`disable_mlock` or grant `IPC_LOCK`. Keep swap disabled or encrypted on the VPS;
-`mem_swappiness: 0` is set on the OpenBao container as an additional safeguard.
-
-The OpenBao data volume is persistent and encrypted by OpenBao's barrier, but it
-still needs normal VPS backup and filesystem protection. Losing both the data
-volume and the unseal/root recovery material can make the secrets unrecoverable.
-
-Use a dedicated Git signing key for this service. Do not reuse an SSH login key.
-
-The GitHub credential should be fine-grained and grant only the repository scope
-and Contents permission required for Git fetch/push.
