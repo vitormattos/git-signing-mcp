@@ -15,6 +15,7 @@ class OpenBaoClient:
         if not settings.openbao_role_id or not settings.openbao_secret_id:
             raise RuntimeError("OPENBAO_ROLE_ID and OPENBAO_SECRET_ID are required")
         self.settings = settings
+        self.client = httpx.Client(timeout=10, trust_env=False)
         self._token: str | None = None
         self._expires_at = 0.0
 
@@ -34,14 +35,13 @@ class OpenBaoClient:
             f"{self.settings.openbao_addr.rstrip('/')}/v1/auth/"
             f"{self.settings.openbao_auth_mount}/login"
         )
-        response = httpx.post(
+        response = self.client.post(
             url,
             json={
                 "role_id": self.settings.openbao_role_id,
                 "secret_id": self.settings.openbao_secret_id,
             },
             headers=self._headers(),
-            timeout=10,
         )
         response.raise_for_status()
         payload = response.json()["auth"]
@@ -56,7 +56,7 @@ class OpenBaoClient:
             f"{self.settings.openbao_addr.rstrip('/')}/v1/"
             f"{self.settings.openbao_kv_mount}/data/{path.lstrip('/')}"
         )
-        response = httpx.get(url, headers=self._headers(token), timeout=10)
+        response = self.client.get(url, headers=self._headers(token))
         response.raise_for_status()
         data = response.json()["data"]["data"]
         if field not in data:
@@ -96,19 +96,4 @@ class SecretResolver:
         return self.openbao.read_kv2(
             self.settings.openbao_signing_path,
             self.settings.openbao_signing_field,
-        )
-
-    def mcp_bearer_token(self) -> str | None:
-        if self.settings.auth_mode == "none":
-            return None
-        if self.settings.mcp_bearer_token_source == "env":
-            if not self.settings.mcp_bearer_token:
-                raise RuntimeError(
-                    "MCP_BEARER_TOKEN or MCP_BEARER_TOKEN_FILE is required "
-                    "when MCP_AUTH_MODE=static-bearer"
-                )
-            return self.settings.mcp_bearer_token
-        return self.openbao.read_kv2(
-            self.settings.openbao_mcp_auth_path,
-            self.settings.openbao_mcp_auth_field,
         )

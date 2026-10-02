@@ -1,7 +1,10 @@
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from git_signing_mcp.gitops import _base_subprocess_env, _git_auth_env
 from git_signing_mcp.security import validate_branch_name, validate_branch_policy
 
 
@@ -39,3 +42,29 @@ def test_feature_branch_is_allowed():
         protected_branch_patterns=("main", "release/*"),
     )
     validate_branch_policy(settings, "feature/example")
+
+
+def test_subprocess_environment_does_not_inherit_service_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("OPENBAO_SECRET_ID", "should-not-leak")
+    monkeypatch.setenv("OPENAI_TUNNEL_RUNTIME_API_KEY", "should-not-leak")
+    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "should-not-leak")
+
+    env = _base_subprocess_env(tmp_path)
+
+    assert "OPENBAO_SECRET_ID" not in env
+    assert "OPENAI_TUNNEL_RUNTIME_API_KEY" not in env
+    assert "MCP_TUNNEL_SHARED_SECRET" not in env
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_github_token_is_added_only_to_authenticated_git_environment(tmp_path: Path):
+    base = _base_subprocess_env(tmp_path)
+    authenticated = _git_auth_env(base, "example-token")
+
+    assert "GIT_CONFIG_VALUE_0" not in base
+    assert "example-token" not in "".join(base.values())
+    assert "example-token" not in "".join(authenticated.values())
+    assert authenticated["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")

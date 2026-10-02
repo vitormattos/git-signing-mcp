@@ -23,7 +23,13 @@ The MCP service:
 - never force-pushes;
 - rejects direct writes to protected branch patterns by default;
 - rejects repository writes through symlinks or outside the checked-out worktree;
-- rate-limits write operations and limits write concurrency.
+- rate-limits write operations and limits write concurrency;
+- receives only the environment variables it needs; tunnel credentials are not
+  injected into the MCP container;
+- launches Git, GPG, and ssh-keygen with a minimal environment that excludes
+  OpenBao credentials, tunnel credentials, and unrelated process secrets;
+- ignores ambient HTTP proxy environment variables for GitHub and OpenBao API
+  requests.
 
 The tunnel-client makes outbound HTTPS requests to the OpenAI tunnel control
 plane. There is no inbound Internet route to the MCP container.
@@ -36,6 +42,11 @@ workspace users who should not be able to create signed commits.
 Tunnel access and ChatGPT app availability are the principal authentication
 boundary. The local shared secret is defense in depth and is not a substitute
 for tunnel/workspace permissions.
+
+"Only ChatGPT" here means only OpenAI products and users authorized to use this
+specific tunnel can route requests to the server. It is not a cryptographic
+identity for a particular model instance. Keep tunnel permissions and the
+ChatGPT app restricted to the intended operator.
 
 ## Repository access
 
