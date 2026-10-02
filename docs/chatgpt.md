@@ -1,36 +1,21 @@
 # ChatGPT integration
 
-The server exposes Streamable HTTP at /mcp.
+The production connection uses OpenAI Secure MCP Tunnel. The MCP server itself
+does not have a public URL.
 
-## Direct development connection
+## Connect
 
-After deploying HTTPS:
-
-1. Enable Developer mode in ChatGPT.
-2. Create an MCP/plugin connection.
-3. Use https://your-host.example/mcp as the server URL.
-4. Configure the authentication mechanism supported by your ChatGPT workspace.
-5. Scan the tools.
-6. Test get_identity and verify_commit before allowing write operations.
-
-For a server that performs writes, keep authentication enabled.
-
-## Plugin package
-
-This repository includes a reusable plugin template under plugin/.
-
-Generate a package after the final public URL is known:
-
-```bash
-python scripts/build_plugin.py \
-  --url https://your-host.example/mcp
-```
-
-The generated archive is written under dist/.
-
-The bundled skill tells the model to use this MCP for commits that need DCO and
-cryptographic signing instead of falling back to a generic repository write
-tool that cannot produce a verified signature.
+1. Create the tunnel in OpenAI Platform tunnel settings and associate it with
+   the intended ChatGPT workspace.
+2. Run this repository's Compose stack with the tunnel ID and runtime API key.
+3. Wait until tunnel-client is healthy and polling.
+4. In ChatGPT Plugins, create a developer-mode app.
+5. Choose **Tunnel** as the connection type.
+6. Select the tunnel or paste its tunnel ID.
+7. Keep the app private; do not publish or share it.
+8. Scan the tools.
+9. Test get_identity and verify_commit.
+10. Then test one commit to a disposable feature branch.
 
 ## Recommended workflow
 
@@ -55,3 +40,15 @@ open/update PR with the normal GitHub connector
 
 The MCP does not replace the complete GitHub connector. It owns only the
 security-sensitive commit creation path.
+
+## Skill package
+
+The optional plugin package in this repository contains the workflow skill only.
+The tunnel-backed MCP connection is created in ChatGPT separately because a
+private tunnel does not use a public `mcp.json` URL.
+
+Build the optional skill package with:
+
+```bash
+python scripts/build_plugin.py
+```

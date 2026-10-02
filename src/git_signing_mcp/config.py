@@ -22,17 +22,25 @@ def _int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str
     port: int
-    public_url: str | None
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
-    auth_mode: str
-    mcp_bearer_token_source: str
-    mcp_bearer_token: str | None
+    tunnel_shared_secret: str
     allowed_repositories: tuple[str, ...]
+    protected_branch_patterns: tuple[str, ...]
+    allow_protected_branch_writes: bool
+    max_writes_per_minute: int
+    max_concurrent_writes: int
     max_file_bytes: int
     max_changes: int
     git_identity_name: str
@@ -53,22 +61,27 @@ class Settings:
     openbao_signing_field: str
     openbao_github_path: str
     openbao_github_field: str
-    openbao_mcp_auth_path: str
-    openbao_mcp_auth_field: str
     verify_retries: int
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         settings = cls(
             host=os.getenv("MCP_HOST", "0.0.0.0"),
             port=_int("MCP_PORT", 8080),
-            public_url=_read_value("MCP_PUBLIC_URL"),
-            allowed_hosts=_csv("MCP_ALLOWED_HOSTS", "localhost,localhost:*,127.0.0.1:*"),
+            allowed_hosts=_csv("MCP_ALLOWED_HOSTS", "mcp,mcp:*"),
             allowed_origins=_csv("MCP_ALLOWED_ORIGINS"),
-            auth_mode=os.getenv("MCP_AUTH_MODE", "static-bearer"),
-            mcp_bearer_token_source=os.getenv("MCP_BEARER_TOKEN_SOURCE", "env"),
-            mcp_bearer_token=_read_value("MCP_BEARER_TOKEN"),
-            allowed_repositories=_csv("ALLOWED_REPOSITORIES"),
+            tunnel_shared_secret=_read_value("MCP_TUNNEL_SHARED_SECRET", "") or "",
+            allowed_repositories=_csv("ALLOWED_REPOSITORIES", "*/*"),
+            protected_branch_patterns=_csv(
+                "PROTECTED_BRANCH_PATTERNS",
+                "main,master,trunk,production,release/*",
+            ),
+            allow_protected_branch_writes=_bool(
+                "ALLOW_PROTECTED_BRANCH_WRITES",
+                False,
+            ),
+            max_writes_per_minute=_int("MAX_WRITES_PER_MINUTE", 10),
+            max_concurrent_writes=_int("MAX_CONCURRENT_WRITES", 1),
             max_file_bytes=_int("MAX_FILE_BYTES", 1_048_576),
             max_changes=_int("MAX_CHANGES", 100),
             git_identity_name=_read_value("GIT_IDENTITY_NAME", "") or "",
@@ -89,27 +102,29 @@ class Settings:
             openbao_signing_field=os.getenv("OPENBAO_SIGNING_FIELD", "private_key"),
             openbao_github_path=os.getenv("OPENBAO_GITHUB_PATH", "git-signing/github"),
             openbao_github_field=os.getenv("OPENBAO_GITHUB_FIELD", "token"),
-            openbao_mcp_auth_path=os.getenv("OPENBAO_MCP_AUTH_PATH", "git-signing/mcp"),
-            openbao_mcp_auth_field=os.getenv("OPENBAO_MCP_AUTH_FIELD", "token"),
             verify_retries=_int("VERIFY_RETRIES", 6),
         )
         settings.validate()
         return settings
 
     def validate(self) -> None:
+        if not self.tunnel_shared_secret or len(self.tunnel_shared_secret) < 32:
+            raise RuntimeError(
+                "MCP_TUNNEL_SHARED_SECRET is required and must contain at least 32 characters"
+            )
         if not self.git_identity_name or not self.git_identity_email:
             raise RuntimeError("GIT_IDENTITY_NAME and GIT_IDENTITY_EMAIL are required")
         if not self.allowed_repositories:
             raise RuntimeError("ALLOWED_REPOSITORIES must contain at least one repository pattern")
-        if self.auth_mode not in {"none", "static-bearer"}:
-            raise RuntimeError("MCP_AUTH_MODE must be 'none' or 'static-bearer'")
         if self.signing_format not in {"ssh", "openpgp"}:
             raise RuntimeError("SIGNING_FORMAT must be 'ssh' or 'openpgp'")
         if self.signing_key_source not in {"file", "openbao"}:
             raise RuntimeError("SIGNING_KEY_SOURCE must be 'file' or 'openbao'")
         if self.github_token_source not in {"env", "openbao"}:
             raise RuntimeError("GITHUB_TOKEN_SOURCE must be 'env' or 'openbao'")
-        if self.mcp_bearer_token_source not in {"env", "openbao"}:
-            raise RuntimeError("MCP_BEARER_TOKEN_SOURCE must be 'env' or 'openbao'")
         if self.max_changes < 1 or self.max_changes > 1000:
             raise RuntimeError("MAX_CHANGES must be between 1 and 1000")
+        if self.max_writes_per_minute < 1 or self.max_writes_per_minute > 600:
+            raise RuntimeError("MAX_WRITES_PER_MINUTE must be between 1 and 600")
+        if self.max_concurrent_writes < 1 or self.max_concurrent_writes > 16:
+            raise RuntimeError("MAX_CONCURRENT_WRITES must be between 1 and 16")

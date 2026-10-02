@@ -16,7 +16,7 @@ down:
 	docker compose down
 
 logs:
-	docker compose logs -f mcp
+	docker compose logs -f mcp tunnel-client
 
 plugin:
-	python scripts/build_plugin.py --url "${MCP_PUBLIC_URL}/mcp"
+	python scripts/build_plugin.py

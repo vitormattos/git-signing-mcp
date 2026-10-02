@@ -1,33 +1,35 @@
 from __future__ import annotations
 
 import secrets
+
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-class StaticBearerMiddleware:
-    def __init__(self, app: ASGIApp, token: str | None) -> None:
+class TunnelAccessMiddleware:
+    """Require a server-side shared secret on every MCP request.
+
+    The secret is injected by the local OpenAI tunnel-client container. It is
+    defense in depth: the MCP container also has no published host port.
+    """
+
+    header_name = b"x-git-signing-auth"
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
         self.app = app
         self.token = token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            self.token
-            and scope["type"] == "http"
-            and str(scope.get("path", "")).startswith("/mcp")
-        ):
-            headers = {
-                key.decode("latin1").lower(): value.decode("latin1")
-                for key, value in scope.get("headers", [])
-            }
-            auth = headers.get("authorization", "")
-            prefix = "Bearer "
-            supplied = auth[len(prefix) :] if auth.startswith(prefix) else ""
+        if scope["type"] == "http" and str(scope.get("path", "")).startswith("/mcp"):
+            supplied = ""
+            for key, value in scope.get("headers", []):
+                if key.lower() == self.header_name:
+                    supplied = value.decode("latin1")
+                    break
             if not supplied or not secrets.compare_digest(supplied, self.token):
                 response = JSONResponse(
                     {"error": "unauthorized"},
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
                 )
                 await response(scope, receive, send)
                 return
