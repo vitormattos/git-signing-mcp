@@ -71,10 +71,15 @@ Then remove the bootstrap token from the shell.
 
 ## D. Configure GitHub authentication
 
-Use a dedicated fine-grained PAT. The current personal deployment intentionally
-uses a broad repository scope because the VPS and signer are dedicated to the
-same operator:
+Use a dedicated fine-grained PAT when the signer only needs repositories owned
+by one GitHub resource owner. Fine-grained PAT repository scope is always bound
+to the selected resource owner: "All repositories" means all repositories owned
+by that user or organization, not every repository the account can access across
+other organizations.
 
+For a single resource owner:
+
+- Resource owner: the target user or organization;
 - Repository access: All repositories;
 - Metadata: Read-only;
 - Contents: Read and write;
@@ -86,7 +91,12 @@ The MCP uses Git over HTTPS for fetch/push and the GitHub commits API for
 signature verification. Keep any broader PAT permission only when another
 documented workflow requires it.
 
-Store the PAT in the external password manager and OpenBao.
+If this personal signer must write across multiple independent resource owners,
+do not assume one fine-grained PAT covers them. Use either credentials selected
+per owner, or another GitHub authentication model explicitly chosen for that
+cross-owner requirement.
+
+Store the selected credential in the external password manager and OpenBao.
 
 ## E. Configure the signing identity
 

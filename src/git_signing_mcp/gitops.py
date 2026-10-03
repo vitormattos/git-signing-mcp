@@ -33,6 +33,90 @@ _SECRET_PATTERNS = (
 )
 
 
+class GitOperationError(RuntimeError):
+    """A sanitized, caller-actionable Git failure."""
+
+    def __init__(self, *, code: str, operation: str, message: str, remediation: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.operation = operation
+        self.remediation = remediation
+
+
+def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
+    operation = next((arg for arg in args[1:] if not arg.startswith("-")), Path(args[0]).name)
+    detail = _redact(stderr).lower()
+
+    if (
+        "permission to " in detail
+        or "requested url returned error: 403" in detail
+        or "write access to repository not granted" in detail
+    ):
+        return GitOperationError(
+            code="github_write_forbidden",
+            operation=operation,
+            message=(
+                "GitHub rejected the write because the configured credential "
+                "cannot push to the repository."
+            ),
+            remediation=(
+                "Grant the MCP GitHub credential write access to this repository "
+                "(for a fine-grained token, include the repository and Contents: read/write), "
+                "then retry the same request."
+            ),
+        )
+
+    if (
+        "authentication failed" in detail
+        or "requested url returned error: 401" in detail
+        or "could not read username" in detail
+        or "bad credentials" in detail
+    ):
+        return GitOperationError(
+            code="github_authentication_failed",
+            operation=operation,
+            message="GitHub rejected the configured credential.",
+            remediation=(
+                "Replace or re-authorize the MCP GitHub credential, then retry the request."
+            ),
+        )
+
+    if (
+        "gh013" in detail
+        or "repository rule violations found" in detail
+        or "protected branch hook declined" in detail
+    ):
+        return GitOperationError(
+            code="github_branch_policy_rejected",
+            operation=operation,
+            message="GitHub repository rules rejected the push.",
+            remediation=(
+                "Use an allowed feature branch or satisfy the repository rules before retrying. "
+                "Do not bypass branch protection from the MCP."
+            ),
+        )
+
+    if "non-fast-forward" in detail or ("[rejected]" in detail and "fetch first" in detail):
+        return GitOperationError(
+            code="branch_head_changed",
+            operation=operation,
+            message="The target branch changed before the push completed.",
+            remediation=(
+                "Refresh the branch HEAD and retry with expected_head_sha set to the current SHA."
+            ),
+        )
+
+    return GitOperationError(
+        code="git_operation_failed",
+        operation=operation,
+        message="The Git operation failed.",
+        remediation=(
+            "Inspect the server audit log using the request_id and correct the "
+            "Git/GitHub failure before retrying."
+        ),
+    )
+
+
 def normalize_commit_message(message: str, name: str, email: str) -> str:
     cleaned = _SIGNOFF_RE.sub("", message).strip()
     return f"{cleaned}\n\nSigned-off-by: {name} <{email}>"
