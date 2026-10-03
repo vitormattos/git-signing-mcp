@@ -16,16 +16,13 @@ SIGNING_FORMAT=ssh
 Store an SSH private key as the signing secret. Register the corresponding
 public key in GitHub as a signing key.
 
-The service configures Git with:
+The service first validates the temporary private key with `ssh-keygen -y`.
+For the commit itself it supplies `gpg.format=ssh` only to that Git invocation
+and passes the temporary key path through `--gpg-sign=<temporary-key-path>`.
 
-```text
-gpg.format=ssh
-user.signingkey=<temporary-key-path>
-commit.gpgsign=true
-```
-
-It then commits with both -S and -s. The same server-configured name and email
-are used for the commit author and DCO Signed-off-by trailer.
+The DCO trailer is normalized in the commit message before Git is invoked; the
+service does not rely on `git commit -s`. The same server-configured name and
+email are used for the commit author, committer, and DCO Signed-off-by trailer.
 
 ## OpenPGP signing
 
