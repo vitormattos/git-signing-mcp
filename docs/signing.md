@@ -123,7 +123,10 @@ returns verified=true.
 By default, `create_signed_git_commit` waits and retries briefly for GitHub to
 publish the verification result. Callers that are optimizing for latency and will
 verify separately can set `wait_for_verification=false`; in that mode the server
-performs a single verification lookup and returns immediately.
+skips the post-push GitHub verification lookup entirely and returns
+`cryptographic_verification=false`, `verification_reason=not_checked`, and
+`verification_attempts=0`. Call `verify_commit` explicitly afterwards when the
+verification result is required.
 
 The audit event for a completed write includes `duration_ms` and
 `verification_attempts` so production latency can be measured without logging
