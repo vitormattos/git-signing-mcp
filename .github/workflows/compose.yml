@@ -36,3 +36,28 @@ jobs:
             -f docker-compose.yml \
             -f docker-compose.openbao.yml \
             config --quiet
+
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.openbao.yml \
+            config --format json > /tmp/compose.json
+
+          python - <<'PY'
+          import json
+
+          with open("/tmp/compose.json", encoding="utf-8") as handle:
+              config = json.load(handle)
+
+          services = config["services"]
+          assert set(services["tunnel-client"]["networks"]) == {"frontend"}
+          assert set(services["mcp"]["networks"]) == {"frontend", "backend"}
+          assert set(services["openbao"]["networks"]) == {"backend"}
+          assert config["networks"]["backend"]["internal"] is True
+
+          for name in ("mcp", "tunnel-client", "openbao"):
+              assert not services[name].get("ports"), f"{name} publishes host ports"
+          PY
+
+          grep -qx 'secrets' .dockerignore
+          grep -qx 'secrets-local' .dockerignore
+          grep -qx 'volumes' .dockerignore
