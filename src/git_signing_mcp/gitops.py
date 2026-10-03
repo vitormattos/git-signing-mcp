@@ -195,6 +195,7 @@ class RepositoryCache:
                         "failed to remove cached worktree; pruning stale metadata: %s",
                         destination,
                     )
+                    shutil.rmtree(destination, ignore_errors=True)
                     try:
                         _run(["git", "worktree", "prune"], cache, env)
                     except RuntimeError:

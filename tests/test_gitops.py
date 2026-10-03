@@ -207,3 +207,31 @@ def test_git_identity_is_passed_through_environment():
     assert env["GIT_AUTHOR_EMAIL"] == "1079143+vitormattos@users.noreply.github.com"
     assert env["GIT_COMMITTER_NAME"] == "Vitor Mattos"
     assert env["GIT_COMMITTER_EMAIL"] == "1079143+vitormattos@users.noreply.github.com"
+
+
+def test_repository_cache_prunes_after_remove_failure(tmp_path: Path, monkeypatch, caplog):
+    calls = []
+
+    def fake_run(args, cwd, env, *, input_text=None):
+        calls.append(args)
+        if args[:3] == ["git", "worktree", "add"]:
+            Path(args[-2]).mkdir(parents=True)
+        if args[:3] == ["git", "worktree", "remove"]:
+            raise RuntimeError("remove failed")
+        return ""
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    cache = gitops.RepositoryCache(str(tmp_path / "repos"))
+    destination = tmp_path / "work"
+
+    with cache.worktree(
+        repository="owner/repo",
+        source_branch="main",
+        destination=destination,
+        env={},
+        auth_env={},
+    ):
+        pass
+
+    assert not destination.exists()
+    assert ["git", "worktree", "prune"] in calls
