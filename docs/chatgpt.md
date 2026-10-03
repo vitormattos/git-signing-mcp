@@ -57,8 +57,13 @@ In the ChatGPT workspace:
 
 After upgrading the MCP server, scan/reload the app tools again. Tool schemas are
 cached by the ChatGPT app, so new request fields such as `patch` or
-`wait_for_verification` are not available to an already-loaded conversation
-until the app refreshes its tools.
+`wait_for_verification` may remain unavailable to an already-loaded
+conversation even when the server is already running the new code.
+
+If `get_identity` reports `tool_schema_version: "2"` but the visible
+`create_signed_git_commit` schema still exposes only `changes`, rescan the app
+tools and start a new conversation. That mismatch means the server is current but
+the conversation still holds an older tool schema.
 
 This service has access to a personal Git signing identity. Treat app access as
 the ability to request signatures within the MCP's repository/branch policy.
@@ -73,7 +78,19 @@ Test in this order:
 3. `create_signed_git_commit` — create one commit on a disposable feature
    branch, never on a protected branch;
 4. confirm GitHub reports the commit signature as Verified;
-5. confirm Author and `Signed-off-by` use the configured identity.
+5. confirm Author and `Signed-off-by` use the configured identity;
+6. when schema version 2 is visible, repeat the disposable-branch test with
+   `patch`, then test `wait_for_verification=false` followed by an explicit
+   `verify_commit`.
+
+For performance validation, inspect the MCP audit log after a commit:
+
+```bash
+docker compose logs --tail=200 mcp | grep '"event":"commit.completed"'
+```
+
+The completed event includes `duration_ms` and `verification_attempts`. Compare
+like-for-like commits instead of relying only on perceived response time.
 
 ## Recommended workflow
 

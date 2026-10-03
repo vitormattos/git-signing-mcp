@@ -54,14 +54,29 @@ Then `unset BAO_TOKEN`.
 
 ## C. Configure GitHub authentication
 
-Use a dedicated fine-grained PAT:
+Use a dedicated fine-grained PAT. The current personal deployment intentionally
+uses a broad repository scope because the VPS and signer are dedicated to the
+same operator:
 
-- explicit resource owner;
-- preferably only selected repositories;
-- Contents: Read and write;
+- Repository access: All repositories;
 - Metadata: Read-only;
-- explicit expiration, for example 90 days;
-- no unrelated permissions.
+- Contents: Read and write;
+- Workflows: Read and write;
+- Actions: Read and write.
+
+`Workflows` is required when this service must update files under
+`.github/workflows/`. `Actions` is broader than the minimum required for a
+plain Git push and is enabled intentionally for this deployment.
+
+The MCP-level repository policy is also intentionally broad:
+
+```text
+ALLOWED_REPOSITORIES=*/*
+```
+
+Direct writes to protected branches remain disabled. A different deployment can
+and should narrow both the PAT repository scope and `ALLOWED_REPOSITORIES` when
+that broader access is unnecessary.
 
 Store the PAT both in the external password manager and OpenBao.
 
@@ -172,7 +187,10 @@ Create a developer-mode custom MCP app using the tunnel connection. Keep the app
 private and do not publish/share it.
 
 Validate `get_identity`, then `verify_commit`, then one
-`create_signed_git_commit` on a disposable feature branch.
+`create_signed_git_commit` on a disposable feature branch. After an upgrade,
+confirm `tool_schema_version` and rescan the ChatGPT app tools. If an existing
+conversation still exposes an older tool schema, start a new conversation before
+testing newly added request fields.
 
 ## J. Recovery after reboot
 
@@ -218,3 +236,32 @@ If OpenBao restarted, unseal it before starting the MCP:
 docker compose up -d --build mcp tunnel-client
 docker compose ps
 ```
+
+
+## M. Post-upgrade smoke test
+
+After pulling and rebuilding the MCP, validate the final production path:
+
+```text
+get_identity
+  -> tool_schema_version=2
+create_signed_git_commit on a disposable feature branch
+  -> signed commit
+  -> matching DCO
+  -> no protected-branch write
+verify_commit
+  -> cryptographic_verification=true
+```
+
+When the refreshed ChatGPT tool schema exposes it, prefer a unified `patch` for
+existing diffs. For a latency-sensitive workflow, test
+`wait_for_verification=false` only when an explicit `verify_commit` follows.
+
+Measure the server-side write time with:
+
+```bash
+docker compose logs --tail=200 mcp | grep '"event":"commit.completed"'
+```
+
+The audit event exposes `duration_ms` and `verification_attempts` without
+logging file contents or credentials.

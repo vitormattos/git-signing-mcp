@@ -93,7 +93,7 @@ MCP_PORT=8080
 MCP_ALLOWED_HOSTS=mcp,mcp:8080
 MCP_ALLOWED_ORIGINS=
 
-ALLOWED_REPOSITORIES=owner/repo
+ALLOWED_REPOSITORIES=*/*
 PROTECTED_BRANCH_PATTERNS=main,master,trunk,production,release/*
 ALLOW_PROTECTED_BRANCH_WRITES=false
 
@@ -125,9 +125,13 @@ REPO_CACHE_DIR=/tmp/git-signing-mcp-repos
 GPG_HOME_DIR=/tmp/git-signing-mcp-gnupg
 ```
 
-Prefer an explicit `ALLOWED_REPOSITORIES` allow-list. `*/*` delegates the
-effective repository boundary entirely to the GitHub PAT and is broader than
-needed for a personal signing service.
+The current personal deployment intentionally uses `ALLOWED_REPOSITORIES=*/*`
+and a dedicated fine-grained PAT with access to all repositories owned by the
+configured resource owner. The PAT currently grants Metadata read-only plus
+Contents, Workflows, and Actions read/write. This is broader than the minimum
+needed for ordinary signed commits, but it is deliberate so the same service can
+modify workflow files. Narrow both layers for deployments that do not need this
+scope.
 
 The local OpenBao override also forces the MCP's effective `OPENBAO_ADDR` to
 `http://openbao:8200`.
@@ -237,6 +241,10 @@ The MCP must become `healthy` before the tunnel client starts.
 
 Follow `docs/chatgpt.md`. This signing service contains a personal signing key,
 so keep the custom app private and do not publish or share it with the workspace.
+
+After an MCP upgrade, rescan the custom app tools. If `get_identity` reports the
+new schema version but the current conversation still exposes an older tool
+signature, start a new conversation before testing new fields.
 
 ## 9. Updating
 
