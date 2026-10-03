@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 FROM python:3.13-slim@sha256:59d365aafe9c497e90af2caf4affe3e57f677328b251945b0327807887ed3772
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
