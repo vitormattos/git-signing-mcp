@@ -5,51 +5,7 @@
 version = 1
 
 [[annotations]]
-path = [
-  ".dockerignore",
-  ".env.example",
-  ".github/dependabot.yml",
-  ".github/workflows/compose.yml",
-  ".github/workflows/docker.yml",
-  ".github/workflows/pytest.yml",
-  ".github/workflows/ruff.yml",
-  ".gitignore",
-  "CONTRIBUTING.md",
-  "Dockerfile",
-  "Makefile",
-  "README.md",
-  "SECURITY.md",
-  "deploy/openbao/openbao.hcl",
-  "docker-compose.openbao.yml",
-  "docker-compose.yml",
-  "docs/chatgpt.md",
-  "docs/deployment.md",
-  "docs/openbao.md",
-  "docs/runbook.md",
-  "docs/security.md",
-  "docs/signing.md",
-  "plugin/plugin.json",
-  "plugin/skills/signed-git-commit/SKILL.md",
-  "plugin/skills/signed-git-commit/agents/openai.yaml",
-  "pyproject.toml",
-  "scripts/build_plugin.py",
-  "src/git_signing_mcp/__init__.py",
-  "src/git_signing_mcp/auth.py",
-  "src/git_signing_mcp/config.py",
-  "src/git_signing_mcp/github.py",
-  "src/git_signing_mcp/gitops.py",
-  "src/git_signing_mcp/gpg_wrapper.py",
-  "src/git_signing_mcp/models.py",
-  "src/git_signing_mcp/secrets.py",
-  "src/git_signing_mcp/security.py",
-  "src/git_signing_mcp/server.py",
-  "tests/test_gitops.py",
-  "tests/test_gpg_wrapper.py",
-  "tests/test_mcp_sdk_compat.py",
-  "tests/test_models.py",
-  "tests/test_secrets.py",
-  "tests/test_security.py",
-]
+path = "plugin/plugin.json"
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
