@@ -263,6 +263,11 @@ docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
   && echo "github token OK"
 ```
 
+The MCP resolves the GitHub token through the in-process secret cache for every
+GitHub API operation. After rotating the PAT in OpenBao, the new token is picked
+up automatically after `SECRET_CACHE_TTL_SECONDS` expires; an MCP restart is not
+required.
+
 ## 9. Create the AppRole credential files
 
 Read the Role ID and generate one Secret ID:

@@ -16,16 +16,13 @@ SIGNING_FORMAT=ssh
 Store an SSH private key as the signing secret. Register the corresponding
 public key in GitHub as a signing key.
 
-The service configures Git with:
+The service first validates the temporary private key with `ssh-keygen -y`.
+For the commit itself it supplies `gpg.format=ssh` only to that Git invocation
+and passes the temporary key path through `--gpg-sign=<temporary-key-path>`.
 
-```text
-gpg.format=ssh
-user.signingkey=<temporary-key-path>
-commit.gpgsign=true
-```
-
-It then commits with both -S and -s. The same server-configured name and email
-are used for the commit author and DCO Signed-off-by trailer.
+The DCO trailer is normalized in the commit message before Git is invoked; the
+service does not rely on `git commit -s`. The same server-configured name and
+email are used for the commit author, committer, and DCO Signed-off-by trailer.
 
 ## OpenPGP signing
 
@@ -123,7 +120,10 @@ returns verified=true.
 By default, `create_signed_git_commit` waits and retries briefly for GitHub to
 publish the verification result. Callers that are optimizing for latency and will
 verify separately can set `wait_for_verification=false`; in that mode the server
-performs a single verification lookup and returns immediately.
+skips the post-push GitHub verification lookup entirely and returns
+`cryptographic_verification=false`, `verification_reason=not_checked`, and
+`verification_attempts=0`. Call `verify_commit` explicitly afterwards when the
+verification result is required.
 
 The audit event for a completed write includes `duration_ms` and
 `verification_attempts` so production latency can be measured without logging

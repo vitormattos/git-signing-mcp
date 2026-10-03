@@ -37,7 +37,7 @@ logging.basicConfig(
 
 settings = Settings.from_env()
 secrets = SecretResolver(settings)
-github = GitHubClient(settings, secrets.github_token())
+github = GitHubClient(settings, secrets.github_token)
 write_guard = WriteGuard(settings)
 repository_cache = RepositoryCache(settings.repo_cache_dir)
 openpgp_cache = OpenPGPKeyCache(settings.gpg_home_dir)
@@ -65,6 +65,32 @@ def _verification(repository: str, commit_sha: str) -> VerificationResult:
         author_email=author.get("email"),
         dco_signed_off_by=lines,
         dco_matches_author=expected in lines,
+    )
+
+
+def _verification_after_push(
+    repository: str,
+    commit_sha: str,
+    wait_for_verification: bool,
+) -> tuple[bool, str | None, int]:
+    if not wait_for_verification:
+        return False, "not_checked", 0
+
+    result: VerificationResult | None = None
+    verification_attempts = 0
+    for attempt in range(settings.verify_retries):
+        verification_attempts += 1
+        result = _verification(repository, commit_sha)
+        if result.cryptographic_verification:
+            break
+        if attempt + 1 < settings.verify_retries:
+            time.sleep(min(0.1 * (2**attempt), 1.0))
+
+    assert result is not None
+    return (
+        result.cryptographic_verification,
+        result.verification_reason,
+        verification_attempts,
     )
 
 
@@ -142,26 +168,21 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
                 openpgp_cache=openpgp_cache,
             )
 
-        result: VerificationResult | None = None
-        verification_attempts = 0
-        max_attempts = settings.verify_retries if request.wait_for_verification else 1
-        for attempt in range(max_attempts):
-            verification_attempts += 1
-            result = _verification(request.repository, commit_sha)
-            if result.cryptographic_verification:
-                break
-            if attempt + 1 < max_attempts:
-                time.sleep(min(0.1 * (2**attempt), 1.0))
-
-        assert result is not None
+        cryptographic_verification, verification_reason, verification_attempts = (
+            _verification_after_push(
+                request.repository,
+                commit_sha,
+                request.wait_for_verification,
+            )
+        )
         audit(
             "commit.completed",
             request_id=request_id,
             repository=request.repository,
             branch=request.branch,
             commit_sha=commit_sha,
-            verified=result.cryptographic_verification,
-            verification_reason=result.verification_reason,
+            verified=cryptographic_verification,
+            verification_reason=verification_reason,
             verification_attempts=verification_attempts,
             duration_ms=round((time.monotonic() - started_at) * 1000),
         )
@@ -173,8 +194,8 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             author_name=settings.git_identity_name,
             author_email=settings.git_identity_email,
             dco_signed_off_by=f"{settings.git_identity_name} <{settings.git_identity_email}>",
-            cryptographic_verification=result.cryptographic_verification,
-            verification_reason=result.verification_reason,
+            cryptographic_verification=cryptographic_verification,
+            verification_reason=verification_reason,
         )
     except (ValueError, PermissionError) as exc:
         audit(
