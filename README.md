@@ -58,7 +58,8 @@ ignored by Git.
 - no force pushes;
 - path/symlink protections;
 - rate and concurrency limits;
-- structured audit events without secret contents;
+- structured audit events without secret contents, including write latency;
+- shallow bare-repository caching with temporary Git worktrees;
 - OpenBao AppRole + KV v2 integration;
 - optional local single-node OpenBao deployment with persistent PebbleDB;
 - file-backed runtime secrets;

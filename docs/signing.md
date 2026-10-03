@@ -71,9 +71,14 @@ OpenBao signing material is read in one KV request, so the private key and
 optional passphrase are fetched atomically from the same secret version.
 
 A shallow bare repository cache under `REPO_CACHE_DIR` avoids downloading the
-same Git history for every commit. Each write still uses a fresh temporary
-worktree; the cache only provides Git objects and is refreshed from GitHub before
-each operation.
+same Git history for every commit. Each write uses `git worktree add --detach`
+directly from the bare cache instead of cloning the cache into another repository.
+The cache is refreshed from GitHub before each operation and the temporary
+worktree is removed afterwards.
+
+Git author/committer identity is passed through the subprocess environment and
+signing configuration is supplied only to the commit command. This avoids several
+`git config` subprocesses per signed commit.
 
 ## Patch input
 
@@ -114,3 +119,12 @@ After pushing, the MCP server queries GitHub's commit API and reports:
 
 A commit is not reported as cryptographically verified unless GitHub itself
 returns verified=true.
+
+By default, `create_signed_git_commit` waits and retries briefly for GitHub to
+publish the verification result. Callers that are optimizing for latency and will
+verify separately can set `wait_for_verification=false`; in that mode the server
+performs a single verification lookup and returns immediately.
+
+The audit event for a completed write includes `duration_ms` and
+`verification_attempts` so production latency can be measured without logging
+repository contents or credentials.

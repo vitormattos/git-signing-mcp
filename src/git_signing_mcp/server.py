@@ -81,6 +81,7 @@ def get_identity() -> dict[str, str]:
         "name": settings.git_identity_name,
         "email": settings.git_identity_email,
         "signing_format": settings.signing_format,
+        "tool_schema_version": "2",
     }
 
 
@@ -108,6 +109,7 @@ def verify_commit(repository: str, commit_sha: str) -> VerificationResult:
 def create_signed_git_commit(request: CommitRequest) -> CommitResult:
     """Create and push one DCO-signed, cryptographically signed Git commit."""
     request_id = new_request_id()
+    started_at = time.monotonic()
     audit(
         "commit.requested",
         request_id=request_id,
@@ -123,17 +125,6 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
         validate_branch_name(request.base_branch)
 
         with write_guard.hold():
-            current_head = github.branch_sha(request.repository, request.branch)
-            branch_exists = current_head is not None
-
-            if request.expected_head_sha is not None and current_head != request.expected_head_sha:
-                raise ValueError("branch HEAD changed; refresh before writing")
-
-            if not branch_exists:
-                base_head = github.branch_sha(request.repository, request.base_branch)
-                if base_head is None:
-                    raise ValueError("base branch does not exist")
-
             signing_key, signing_passphrase = secrets.signing_material()
             commit_sha = create_signed_commit(
                 settings=settings,
@@ -143,7 +134,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
                 repository=request.repository,
                 branch=request.branch,
                 base_branch=request.base_branch,
-                branch_exists=branch_exists,
+                expected_head_sha=request.expected_head_sha,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,
@@ -152,12 +143,15 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             )
 
         result: VerificationResult | None = None
-        for attempt in range(settings.verify_retries):
+        verification_attempts = 0
+        max_attempts = settings.verify_retries if request.wait_for_verification else 1
+        for attempt in range(max_attempts):
+            verification_attempts += 1
             result = _verification(request.repository, commit_sha)
             if result.cryptographic_verification:
                 break
-            if attempt + 1 < settings.verify_retries:
-                time.sleep(0.5)
+            if attempt + 1 < max_attempts:
+                time.sleep(min(0.1 * (2**attempt), 1.0))
 
         assert result is not None
         audit(
@@ -168,6 +162,8 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             commit_sha=commit_sha,
             verified=result.cryptographic_verification,
             verification_reason=result.verification_reason,
+            verification_attempts=verification_attempts,
+            duration_ms=round((time.monotonic() - started_at) * 1000),
         )
         return CommitResult(
             repository=request.repository,
