@@ -15,6 +15,14 @@ The MCP service consumes `ghcr.io/vitormattos/git-signing-mcp:latest` by
 default. Set `MCP_IMAGE` to a `sha-<git-sha>` tag when a deployment should
 remain pinned to one published build.
 
+The first GHCR package published under a personal account is private by default.
+Because this repository and its image contain no deployment secrets, the
+recommended production setup is to change the package visibility to **Public**
+once after the first successful publication. Public GHCR images can be pulled
+without storing a registry credential on the VPS. If the package is intentionally
+kept private instead, authenticate Docker to `ghcr.io` on the VPS before
+running `docker compose pull`.
+
 ## 1. Clone and prepare the local topology
 
 ```bash

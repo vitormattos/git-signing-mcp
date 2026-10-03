@@ -6,6 +6,9 @@
 
 FROM python:3.13-slim@sha256:59d365aafe9c497e90af2caf4affe3e57f677328b251945b0327807887ed3772
 
+LABEL org.opencontainers.image.source="https://github.com/vitormattos/git-signing-mcp" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

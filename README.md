@@ -44,9 +44,10 @@ ghcr.io/vitormattos/git-signing-mcp:latest
 ghcr.io/vitormattos/git-signing-mcp:sha-<git-sha>
 ```
 
-Pull requests build and lint the image but never publish it. Published builds
-include SBOM and provenance attestations, and Buildx reuses the GitHub Actions
-cache between builds.
+Pull requests lint, build, and smoke-test the image but never publish it.
+Published builds include SBOM and provenance attestations, and Buildx reuses the
+GitHub Actions cache between builds. The GHCR package should be made public after
+its first publication when anonymous production pulls are desired.
 
 The canonical Docker Compose stack consumes the published MCP image and includes
 the OpenAI tunnel client and local OpenBao service. Prepare the persistent
