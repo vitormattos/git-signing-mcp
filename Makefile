@@ -11,10 +11,10 @@ lint:
 	ruff check src tests scripts
 
 build:
-	docker compose build
+	docker build -t git-signing-mcp:local .
 
 up:
-	docker compose up -d --build
+	MCP_IMAGE=git-signing-mcp:local docker compose up -d
 
 down:
 	docker compose down

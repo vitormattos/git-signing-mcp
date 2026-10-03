@@ -4,9 +4,7 @@
 
 services:
   mcp:
-    build:
-      context: .
-    image: git-signing-mcp:local
+    image: ${MCP_IMAGE:-ghcr.io/vitormattos/git-signing-mcp:latest}
     restart: unless-stopped
     environment:
       MCP_HOST: ${MCP_HOST:-0.0.0.0}
