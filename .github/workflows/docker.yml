@@ -39,7 +39,6 @@ jobs:
           push: false
           tags: git-signing-mcp:test
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
-          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
