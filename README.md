@@ -44,12 +44,12 @@ Pull requests lint, build, and smoke-test the image without publishing it.
 
 ## Documentation
 
-- [VPS runbook](docs/runbook.md): complete installation and update procedure.
-- [Deployment](docs/deployment.md): Docker Compose, runtime configuration, and operations.
-- [OpenBao](docs/openbao.md): bootstrap, auto-unseal, migration, and recovery.
-- [ChatGPT integration](docs/chatgpt.md): Secure MCP Tunnel and private app setup.
-- [Security architecture](docs/security.md): threat model, secrets, networks, and hardening.
-- [Commit signing](docs/signing.md): SSH/OpenPGP signing, DCO, caches, and verification.
+- [VPS runbook](docs/01-runbook.md): complete installation and update procedure.
+- [Deployment](docs/02-deployment.md): Docker Compose, runtime configuration, and operations.
+- [OpenBao](docs/03-openbao.md): bootstrap, auto-unseal, migration, and recovery.
+- [ChatGPT integration](docs/04-chatgpt.md): Secure MCP Tunnel and private app setup.
+- [Security architecture](docs/05-security.md): threat model, secrets, networks, and hardening.
+- [Commit signing](docs/06-signing.md): SSH/OpenPGP signing, DCO, caches, and verification.
 
 ## Local development
 

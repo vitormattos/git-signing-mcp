@@ -9,7 +9,7 @@ This guide covers the self-contained VPS deployment used for `git-signing-mcp`:
 OpenBao, the MCP server, and the OpenAI Secure MCP Tunnel client run on the same
 host. No MCP or OpenBao port is published to the Internet.
 
-For a complete fresh-install sequence, also see `docs/runbook.md`.
+For a complete fresh-install sequence, also see `docs/01-runbook.md`.
 
 The MCP service consumes `ghcr.io/vitormattos/git-signing-mcp:latest` by
 default. Set `MCP_IMAGE` to a `sha-<git-sha>` tag when a deployment should
@@ -57,12 +57,12 @@ Do not print the key, put it in `.env`, or place it in the OpenBao data volume.
 Keep a separate copy in the external password manager or another recovery store.
 
 For an existing Shamir installation, **do not simply restart with the new
-configuration**. Follow the migration procedure in `docs/openbao.md`, including
+configuration**. Follow the migration procedure in `docs/03-openbao.md`, including
 an offline backup and `bao operator unseal -migrate`.
 
 ## 3. Bootstrap OpenBao
 
-For a fresh installation, follow `docs/openbao.md` to:
+For a fresh installation, follow `docs/03-openbao.md` to:
 
 1. start OpenBao with the static seal configured;
 2. initialize it with recovery material;
