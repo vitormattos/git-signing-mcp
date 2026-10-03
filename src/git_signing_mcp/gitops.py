@@ -115,7 +115,7 @@ def _run(
             process.returncode,
             _redact(process.stderr[-4000:]),
         )
-        raise RuntimeError("Git operation failed")
+        raise _classify_git_failure(args, process.stderr)
     return process.stdout.strip()
 
 
@@ -153,7 +153,7 @@ def _fetch_remote_branch(
         process.returncode,
         _redact(process.stderr[-4000:]),
     )
-    raise RuntimeError("Git operation failed")
+    raise _classify_git_failure(args, process.stderr)
 
 
 class RepositoryCache:

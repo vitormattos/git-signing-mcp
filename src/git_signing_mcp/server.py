@@ -18,8 +18,8 @@ from starlette.responses import JSONResponse
 from .auth import TunnelAccessMiddleware
 from .config import Settings
 from .github import GitHubClient
-from .gitops import OpenPGPKeyCache, RepositoryCache, create_signed_commit
-from .models import CommitRequest, CommitResult, VerificationResult
+from .gitops import GitOperationError, OpenPGPKeyCache, RepositoryCache, create_signed_commit
+from .models import CommitFailure, CommitRequest, CommitResult, VerificationResult
 from .secrets import SecretResolver
 from .security import (
     WriteGuard,
@@ -107,7 +107,7 @@ def get_identity() -> dict[str, str]:
         "name": settings.git_identity_name,
         "email": settings.git_identity_email,
         "signing_format": settings.signing_format,
-        "tool_schema_version": "2",
+        "tool_schema_version": "3",
     }
 
 
@@ -132,7 +132,7 @@ def verify_commit(repository: str, commit_sha: str) -> VerificationResult:
         open_world_hint=True,
     )
 )
-def create_signed_git_commit(request: CommitRequest) -> CommitResult:
+def create_signed_git_commit(request: CommitRequest) -> CommitResult | CommitFailure:
     """Create and push one DCO-signed, cryptographically signed Git commit."""
     request_id = new_request_id()
     started_at = time.monotonic()
@@ -196,6 +196,24 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
             dco_signed_off_by=f"{settings.git_identity_name} <{settings.git_identity_email}>",
             cryptographic_verification=cryptographic_verification,
             verification_reason=verification_reason,
+        )
+    except GitOperationError as exc:
+        audit(
+            "commit.rejected",
+            request_id=request_id,
+            repository=request.repository,
+            branch=request.branch,
+            reason=exc.code,
+            operation=exc.operation,
+        )
+        return CommitFailure(
+            repository=request.repository,
+            branch=request.branch,
+            request_id=request_id,
+            error_code=exc.code,
+            operation=exc.operation,
+            message=str(exc),
+            remediation=exc.remediation,
         )
     except (ValueError, PermissionError) as exc:
         audit(
