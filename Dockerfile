@@ -25,6 +25,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
+# The pip cache is a BuildKit cache mount and is not persisted in the image layer.
+# hadolint ignore=DL3042
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install .
 
