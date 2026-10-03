@@ -128,3 +128,28 @@ verification result is required.
 The audit event for a completed write includes `duration_ms` and
 `verification_attempts` so production latency can be measured without logging
 repository contents or credentials.
+
+
+## Actionable write failures
+
+`create_signed_git_commit` returns a structured failure for known Git/GitHub
+write errors instead of collapsing them into a generic MCP execution error. The
+response includes `request_id`, `error_code`, `operation`, `message`, and `remediation`.
+
+Current error codes include:
+
+- `github_write_forbidden`: the configured GitHub credential cannot write to
+  the repository. For a fine-grained token, grant access to the repository and
+  Contents: read/write.
+- `github_authentication_failed`: the credential is invalid, expired, or no
+  longer authorized.
+- `github_branch_policy_rejected`: GitHub rules or branch protection rejected
+  the push.
+- `branch_head_changed`: the branch moved before the push; refresh HEAD and
+  retry with `expected_head_sha`.
+- `git_operation_failed`: an unclassified Git failure; use the returned
+  `request_id` to correlate with the server audit log.
+
+After deploying this version, `get_identity` reports
+`tool_schema_version: "3"`. Rescan the ChatGPT app tools so the updated result
+schema is visible to callers.

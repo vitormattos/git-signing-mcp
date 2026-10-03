@@ -313,3 +313,38 @@ def test_fetch_remote_branch_treats_missing_ref_as_absent(tmp_path: Path, monkey
     monkeypatch.setattr(gitops.subprocess, "run", lambda *args, **kwargs: Result())
 
     assert gitops._fetch_remote_branch(tmp_path, "missing", {}) is False
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code"),
+    [
+        (
+            "remote: Permission to LibreSign/libresign.git denied to vitormattos.\n"
+            "fatal: unable to access 'https://github.com/LibreSign/libresign.git/': "
+            "The requested URL returned error: 403\n",
+            "github_write_forbidden",
+        ),
+        ("remote: Invalid username or token. Authentication failed.\n", "github_authentication_failed"),
+        ("remote: error: GH013: Repository rule violations found.\n", "github_branch_policy_rejected"),
+        ("! [rejected] HEAD -> feature/test (non-fast-forward)\n", "branch_head_changed"),
+    ],
+)
+def test_run_classifies_actionable_git_failures(monkeypatch, tmp_path: Path, stderr: str, code: str):
+    class Result:
+        returncode = 128
+        stdout = ""
+
+    result = Result()
+    result.stderr = stderr
+    monkeypatch.setattr(gitops.subprocess, "run", lambda *args, **kwargs: result)
+
+    with pytest.raises(gitops.GitOperationError) as exc_info:
+        gitops._run(
+            ["git", "push", "--quiet", "origin", "HEAD:refs/heads/feature/test"],
+            tmp_path,
+            {},
+        )
+
+    assert exc_info.value.code == code
+    assert exc_info.value.operation == "push"
+    assert exc_info.value.remediation

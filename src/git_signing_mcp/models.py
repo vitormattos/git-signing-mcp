@@ -64,6 +64,7 @@ class CommitRequest(BaseModel):
 
 
 class CommitResult(BaseModel):
+    success: Literal[True] = True
     repository: str
     branch: str
     commit_sha: str
@@ -73,6 +74,17 @@ class CommitResult(BaseModel):
     dco_signed_off_by: str
     cryptographic_verification: bool
     verification_reason: str | None = None
+
+
+class CommitFailure(BaseModel):
+    success: Literal[False] = False
+    repository: str
+    branch: str
+    request_id: str
+    error_code: str
+    operation: str
+    message: str
+    remediation: str
 
 
 class VerificationResult(BaseModel):
