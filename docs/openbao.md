@@ -12,17 +12,17 @@ The local single-node topology uses OpenBao 2.7.1, PebbleDB, and Static Key Auto
 Unseal. The design deliberately treats the trusted VPS/root account as the local
 source of trust for auto-unseal.
 
-## 1. Enable the tracked local topology
+## 1. Prepare the tracked local topology
 
 ```bash
-ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 -o 100 -g 100 volumes/openbao
 install -d -m 700 secrets
 chmod 644 deploy/openbao/openbao.hcl
 chmod 755 deploy deploy/openbao
 ```
 
-Data persists under `./volumes/openbao`.
+OpenBao is defined directly in the canonical `docker-compose.yml`; no Compose
+override symlink is required. Data persists under `./volumes/openbao`.
 
 ## 2. Create the static auto-unseal key
 

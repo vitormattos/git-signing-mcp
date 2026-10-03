@@ -32,15 +32,7 @@ jobs:
           head -c 32 /dev/zero > secrets/openbao_static_seal_key
 
           docker compose config --quiet
-          docker compose \
-            -f docker-compose.yml \
-            -f docker-compose.openbao.yml \
-            config --quiet
-
-          docker compose \
-            -f docker-compose.yml \
-            -f docker-compose.openbao.yml \
-            config --format json > /tmp/compose.json
+          docker compose config --format json > /tmp/compose.json
 
           python - <<'PY'
           import json

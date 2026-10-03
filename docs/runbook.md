@@ -14,7 +14,6 @@ This is the canonical installation sequence for the self-contained personal
 git clone git@github.com:vitormattos/git-signing-mcp.git
 cd git-signing-mcp
 cp .env.example .env
-ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 secrets
 install -d -m 700 -o 100 -g 100 volumes/openbao
 ```
