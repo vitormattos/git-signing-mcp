@@ -24,9 +24,12 @@ commit.
    - use `changes` for small direct upserts/deletes or when no patch exists.
 6. Do not add a Signed-off-by identity yourself. The server appends the DCO
    trailer so it matches the actual commit author.
-7. Check the returned cryptographic verification. Call verify_commit when a
+7. Keep `wait_for_verification=true` when the commit result itself must confirm
+   GitHub verification. For latency-sensitive multi-commit workflows, set it to
+   `false` only when a separate `verify_commit` will be performed afterwards.
+8. Check the returned cryptographic verification. Call verify_commit when a
    separate verification is useful.
-8. Use the normal GitHub/repository connector for PR metadata, reviews, issues,
+9. Use the normal GitHub/repository connector for PR metadata, reviews, issues,
    and other operations that do not require commit signing.
 
 Do not fall back to an unsigned generic commit action when the user or repository

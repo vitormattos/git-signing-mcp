@@ -50,6 +50,11 @@ In the ChatGPT workspace:
 6. do not publish or share it to the workspace;
 7. scan the tools.
 
+After upgrading the MCP server, scan/reload the app tools again. Tool schemas are
+cached by the ChatGPT app, so new request fields such as `patch` or
+`wait_for_verification` are not available to an already-loaded conversation
+until the app refreshes its tools.
+
 This service has access to a personal Git signing identity. Treat app access as
 the ability to request signatures within the MCP's repository/branch policy.
 
@@ -57,7 +62,8 @@ the ability to request signatures within the MCP's repository/branch policy.
 
 Test in this order:
 
-1. `get_identity` — confirm the fixed name, email, and `openpgp` format;
+1. `get_identity` — confirm the fixed name, email, `openpgp` format, and the
+   expected `tool_schema_version`;
 2. `verify_commit` — verify a known commit;
 3. `create_signed_git_commit` — create one commit on a disposable feature
    branch, never on a protected branch;
