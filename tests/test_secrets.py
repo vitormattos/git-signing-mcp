@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 from types import SimpleNamespace
 
 from git_signing_mcp.secrets import SecretResolver

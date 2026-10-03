@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # ChatGPT integration
 
 The production connection uses OpenAI Secure MCP Tunnel. The MCP server itself

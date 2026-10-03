@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
@@ -7,6 +11,7 @@ name = "git-signing-mcp"
 version = "0.1.0"
 description = "Self-hosted MCP server for cryptographically signed Git commits with DCO enforcement."
 readme = "README.md"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
   "httpx>=0.28,<1",

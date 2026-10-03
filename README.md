@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # git-signing-mcp
 
 Self-hosted MCP server for creating Git commits with a fixed server-side identity,

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Optional local OpenBao service.
 # Symlink this file as docker-compose.override.yml on hosts that should run
 # OpenBao beside the MCP. docker-compose.override.yml is intentionally ignored.
