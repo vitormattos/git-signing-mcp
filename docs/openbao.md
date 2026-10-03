@@ -5,30 +5,46 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # OpenBao setup
 
-The MCP uses OpenBao KV v2 for:
+The MCP uses OpenBao KV v2 for the GitHub credential, Git signing private key,
+and optional OpenPGP passphrase.
 
-- the GitHub credential;
-- the Git signing private key;
-- optionally, the OpenPGP private-key passphrase in the same signing secret.
-
-This document describes the local single-node OpenBao topology.
+The local single-node topology uses OpenBao 2.7.1, PebbleDB, and Static Key Auto
+Unseal. The design deliberately treats the trusted VPS/root account as the local
+source of trust for auto-unseal.
 
 ## 1. Enable the tracked local topology
 
 ```bash
 ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 -o 100 -g 100 volumes/openbao
+install -d -m 700 secrets
 chmod 644 deploy/openbao/openbao.hcl
 chmod 755 deploy deploy/openbao
 ```
 
-Do not enable `BAO_ENABLE_FILE_PERMISSIONS_CHECK` for this bind-mounted
-configuration. The HCL contains no secrets and is intentionally owned by the host
-checkout user while OpenBao runs as UID 100.
+Data persists under `./volumes/openbao`.
 
-OpenBao 2.7 uses PebbleDB here. Data persists under `./volumes/openbao`.
+## 2. Create the static auto-unseal key
 
-## 2. Start and initialize once
+OpenBao's static seal requires exactly 32 bytes for AES-256-GCM-96:
+
+```bash
+(
+  umask 077
+  openssl rand -out secrets/openbao_static_seal_key 32
+)
+chmod 0444 secrets/openbao_static_seal_key
+test "$(wc -c < secrets/openbao_static_seal_key)" -eq 32
+```
+
+The key is mounted only into OpenBao at
+`/run/secrets/openbao_static_seal_key`. It is not placed in `.env`, the
+container image, Git, or the OpenBao data volume.
+
+Back up this key separately from `volumes/openbao`. Recovery keys cannot
+replace a permanently lost auto-unseal key.
+
+## 3. Fresh installation
 
 Start only OpenBao:
 
@@ -42,28 +58,13 @@ Initialize exactly once:
 ```bash
 docker compose exec openbao \
   bao operator init \
-  -key-shares=3 \
-  -key-threshold=2
+  -recovery-shares=1 \
+  -recovery-threshold=1
 ```
 
-Store outside the VPS, preferably in a password manager:
-
-- OpenBao Unseal Key 1;
-- OpenBao Unseal Key 2;
-- OpenBao Unseal Key 3;
-- OpenBao Initial Root Token;
-- metadata noting threshold 2 of 3 and this VPS/service.
-
-Do not paste any of these values into issue trackers, chats, or shell history.
-
-## 3. Unseal
-
-Three shares exist, but the threshold is two. Use any two different shares:
-
-```bash
-docker compose exec openbao bao operator unseal
-docker compose exec openbao bao operator unseal
-```
+Store the recovery key and initial root token outside the VPS. For this
+single-operator deployment, 1/1 recovery material avoids recreating a
+multi-custodian ceremony that does not exist operationally.
 
 Confirm:
 
@@ -78,10 +79,100 @@ Initialized     true
 Sealed          false
 ```
 
-Unseal is required again after every OpenBao restart until an auto-unseal
-mechanism is deliberately configured.
+Normal restarts should return to this state automatically.
 
-## 4. Load the root token only for bootstrap
+## 4. Existing Shamir 2-of-3 installation: migration
+
+This is a seal migration, not a storage migration. Do not run
+`bao operator migrate`; PebbleDB remains unchanged.
+
+### 4.1 Pre-flight
+
+Before changing the seal, confirm the current installation while it is still
+unsealed:
+
+```bash
+docker compose exec openbao bao status
+docker compose exec openbao bao version
+docker compose config --quiet
+```
+
+Confirm that the three existing Shamir shares and root token are available in
+the external password manager. Do not paste them into shell arguments or chat.
+
+### 4.2 Take an offline backup
+
+Stop clients first, then OpenBao, so the PebbleDB copy is consistent:
+
+```bash
+docker compose stop tunnel-client mcp
+docker compose stop openbao
+```
+
+Create an offline backup of `volumes/openbao` using the host's normal backup
+mechanism. Do not include `secrets/openbao_static_seal_key` in the same backup
+object/archive.
+
+Do not continue unless both are true:
+
+- the OpenBao data backup exists and can be restored;
+- the static key has its own separate recovery copy.
+
+### 4.3 Start with the new seal configuration
+
+After the static key file exists and the tracked configuration containing
+`seal "static"` is deployed:
+
+```bash
+docker compose up -d openbao
+docker compose exec openbao bao status || true
+```
+
+At this point the existing Shamir-protected storage requires seal migration.
+Provide the existing Shamir shares interactively with `-migrate`:
+
+```bash
+docker compose exec openbao bao operator unseal -migrate
+docker compose exec openbao bao operator unseal -migrate
+```
+
+Enter two different existing shares when prompted. Do not pass shares as command
+arguments.
+
+OpenBao migrates the old Shamir shares into recovery-key semantics for the new
+auto seal. Those recovery keys authorize sensitive operator workflows but cannot
+decrypt the root key if the static seal key is unavailable.
+
+### 4.4 Validate before discarding anything
+
+```bash
+docker compose exec openbao bao status
+docker compose restart openbao
+docker compose exec openbao bao status
+```
+
+Both status checks must report `Initialized true` and `Sealed false`.
+Inspect logs for seal errors:
+
+```bash
+docker compose logs --tail=100 openbao
+```
+
+Only after a successful restart should the MCP be started:
+
+```bash
+docker compose up -d --build mcp tunnel-client
+```
+
+Keep the old Shamir/recovery material until the migration, restart, MCP login,
+and signed-commit smoke test have all succeeded.
+
+The migration has downtime. Rollback before migration is simply restoring the
+old configuration. After the migration has completed, rollback to Shamir is
+another seal migration; do not assume that removing the `seal "static"` stanza
+will restore the old behavior.
+
+## 5. Load the root token only for bootstrap
 
 ```bash
 read -rsp "OpenBao root token: " BAO_TOKEN
@@ -91,10 +182,9 @@ test -n "$BAO_TOKEN" && echo "BAO_TOKEN loaded"
 
 Do not print the token.
 
-## 5. Enable KV v2 and AppRole
+## 6. Enable KV v2 and AppRole
 
-These commands are idempotent only in the sense that an already-enabled mount
-should be detected rather than recreated. Inspect first when rerunning bootstrap:
+Inspect first:
 
 ```bash
 docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao bao secrets list
@@ -106,15 +196,11 @@ If missing:
 ```bash
 docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
   bao secrets enable -path=secret -version=2 kv
-
 docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
   bao auth enable approle
 ```
 
-Expected mounts include `secret/` of type `kv` and `approle/` of type
-`approle`.
-
-## 6. Create the least-privilege policy
+## 7. Create the least-privilege policy and AppRole
 
 ```bash
 docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
@@ -141,200 +227,101 @@ docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
   secret_id_num_uses=0
 ```
 
-Verify without exposing credentials:
+The AppRole token is short lived: 20-minute TTL and 1-hour maximum TTL. The
+Secret ID is intentionally long lived and unlimited-use for this dedicated
+machine credential; rotate it after host compromise.
 
-```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao read auth/approle/role/git-signing-mcp
+## 8. Store application secrets
+
+Store:
+
+```text
+secret/git-signing/signing
+├── private_key
+└── passphrase
+
+secret/git-signing/github
+└── token
 ```
 
-The long-lived Secret ID is a machine credential. Rotate it if the host is
-compromised.
+Use stdin or interactive prompts rather than command-line arguments for secret
+material. The MCP reads these values through AppRole/KV v2.
 
-## 7. Store a signing key
-
-A dedicated signing key is recommended. Reusing an existing personal OpenPGP key
-is supported, but it increases the impact of a VPS compromise because that host
-can then create signatures under the same personal key identity.
-
-### OpenPGP key exported from another machine
-
-Export the private key on the machine that already owns it:
-
-```bash
-gpg --armor --export-secret-keys <KEY_ID> > git-signing-mcp-private.asc
-chmod 600 git-signing-mcp-private.asc
-```
-
-Copy it to a private bootstrap directory on the VPS. `secrets-local/` is
-ignored by Git:
-
-```bash
-install -d -m 700 secrets-local
-chmod 600 secrets-local/git-signing-mcp-private.asc
-```
-
-Store it:
-
-```bash
-docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv put secret/git-signing/signing \
-  private_key=- < secrets-local/git-signing-mcp-private.asc
-```
-
-For a passphrase-protected OpenPGP key, preserve the existing `private_key`
-field and add only the passphrase:
-
-```bash
-read -rsp "GPG passphrase: " GPG_PASSPHRASE
-echo
-printf '%s' "$GPG_PASSPHRASE" | \
-  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv patch secret/git-signing/signing passphrase=-
-unset GPG_PASSPHRASE
-```
-
-The service reads `private_key` and, when `SIGNING_FORMAT=openpgp`, the
-optional `passphrase` field. It uses GPG loopback mode with a temporary
-mode-0600 passphrase file under the container's tmpfs; the passphrase is not put
-in process arguments or the long-running process environment.
-
-Validate without printing values:
-
-```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv get -field=private_key secret/git-signing/signing >/dev/null \
-  && echo "private key OK"
-
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv get -field=passphrase secret/git-signing/signing >/dev/null \
-  && echo "passphrase OK"
-```
-
-Only after validation, remove the temporary export from the VPS and source
-machine.
-
-### SSH signing alternative
-
-Generate a dedicated Ed25519 key, register the public key in GitHub as a signing
-key, and store the private key in the same `private_key` field. Set
-`SIGNING_FORMAT=ssh`. Do not reuse an SSH login key.
-
-## 8. Create a fine-grained GitHub PAT
-
-Create a dedicated fine-grained PAT for the MCP.
-
-For the current personal deployment:
-
-- token name: `git-signing-mcp`;
-- description: `Token dedicado ao git-signing-mcp para consultar repositórios e fazer push de commits assinados.`;
-- choose the correct resource owner;
-- Repository access: All repositories;
-- Metadata: Read-only;
-- Contents: Read and write;
-- Workflows: Read and write;
-- Actions: Read and write;
-- use an explicit expiration/rotation period.
-
-The broad scope is intentional for this single-user trusted VPS. `Workflows`
-allows updates under `.github/workflows/`; `Actions` is broader than a plain
-commit requires. For a narrower deployment, prefer selected repositories and
-remove permissions that are not needed.
-
-Store the PAT in a password manager.
-
-Write it to OpenBao without storing it in the repository:
-
-```bash
-read -rsp "GitHub token: " GITHUB_TOKEN
-echo
-
-docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv put secret/git-signing/github token="$GITHUB_TOKEN"
-
-unset GITHUB_TOKEN
-```
-
-Validate:
-
-```bash
-docker compose exec -e BAO_TOKEN="$BAO_TOKEN" openbao \
-  bao kv get -field=token secret/git-signing/github >/dev/null \
-  && echo "github token OK"
-```
-
-The MCP resolves the GitHub token through the in-process secret cache for every
-GitHub API operation. After rotating the PAT in OpenBao, the new token is picked
-up automatically after `SECRET_CACHE_TTL_SECONDS` expires; an MCP restart is not
-required.
+The persistent secrets are in PebbleDB. The MCP also keeps short-lived copies in
+process memory for `SECRET_CACHE_TTL_SECONDS` and imports GPG material under its
+tmpfs. Those caches disappear when the MCP container is recreated.
 
 ## 9. Create the AppRole credential files
 
-Read the Role ID and generate one Secret ID:
+Read the Role ID and create a Secret ID, then write them to:
 
-```bash
-OPENBAO_ROLE_ID="$(
-  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
-    bao read -field=role_id auth/approle/role/git-signing-mcp/role-id
-)"
-
-OPENBAO_SECRET_ID="$(
-  docker compose exec -T -e BAO_TOKEN="$BAO_TOKEN" openbao \
-    bao write -f -field=secret_id auth/approle/role/git-signing-mcp/secret-id
-)"
+```text
+secrets/openbao_role_id
+secrets/openbao_secret_id
 ```
 
-Write them:
+Keep the directory `0700` and the mounted files `0444` so the non-root MCP
+container can read them through Docker's secret mount.
 
-```bash
-install -d -m 700 secrets
-(
-  umask 077
-  printf '%s' "$OPENBAO_ROLE_ID" > secrets/openbao_role_id
-  printf '%s' "$OPENBAO_SECRET_ID" > secrets/openbao_secret_id
-)
-unset OPENBAO_ROLE_ID OPENBAO_SECRET_ID
-```
-
-The containers run as non-root users, so change only the individual files to
-read-only world-readable while keeping the parent directory inaccessible to
-ordinary host users:
-
-```bash
-chmod 700 secrets
-chmod 0444 secrets/openbao_role_id secrets/openbao_secret_id
-```
-
-Now remove the bootstrap root token from the shell:
+Then:
 
 ```bash
 unset BAO_TOKEN
 ```
 
-Keep the root token only in the external password manager for recovery/bootstrap
-administration.
-
-## 10. Operational restart sequence
-
-After a host or OpenBao restart:
+## 10. Normal restart behavior
 
 ```bash
-docker compose up -d openbao
-docker compose exec openbao bao status || true
+docker compose restart openbao
+docker compose exec openbao bao status
 ```
 
-If sealed, unseal twice with two distinct shares, then confirm `Sealed false`.
+Expected: OpenBao automatically returns to `Sealed false`. The same applies
+after a full VPS reboot as long as Docker starts the Compose services and both
+the persistent volume and static key file remain available.
 
-The Compose healthcheck intentionally treats sealed OpenBao as unhealthy, and
-the MCP waits for `service_healthy`.
+If the OpenBao container is recreated, the bind-mounted PebbleDB and static key
+remain. If the MCP container is recreated or its `/tmp` is lost, only caches
+are lost and rebuilt.
+
+## 11. Recovery matrix
+
+### Static key lost, storage intact
+
+Restore the exact 32-byte static key from its separate backup. Recovery keys do
+not decrypt the root key and cannot substitute for it.
+
+### Storage lost, static key intact
+
+Restore the matching OpenBao data backup and start OpenBao with the same static
+key. If no data backup exists, rebuild OpenBao and repopulate the application
+secrets from their authoritative backups.
+
+### Both lost
+
+Restore both from independent recovery copies. Without either the matching
+storage or the matching static seal key, the old OpenBao secrets cannot be
+recovered.
+
+### GitHub PAT rotated
+
+Update `secret/git-signing/github`. The MCP reads the new token after
+`SECRET_CACHE_TTL_SECONDS`, or immediately after an MCP restart.
+
+### GPG key rotated
+
+Update the private key/passphrase secret and register the new public signing key
+in GitHub. Restarting the MCP clears the tmpfs GPG import and secret cache.
 
 ## Security notes
 
 - OpenBao listens on HTTP only inside the private Docker network and publishes no
   host port.
-- The Docker host/root account remains part of the trusted computing base.
+- The Docker host/root account is intentionally part of the trusted computing
+  base.
+- Static auto-unseal removes routine manual unseal but makes availability of the
+  static key a strict lifecycle dependency.
+- Theft of `volumes/openbao` alone does not include the static key. Theft of
+  both the storage and static key defeats that separation.
+- Keep the OpenBao data backup and static-key backup separate.
 - OpenBao 2.7 no longer supports `mlock`; keep swap disabled or encrypted.
-- Back up `volumes/openbao` and retain unseal material separately. Losing both
-  can make secrets unrecoverable.
-- The GitHub PAT and any reused personal GPG key materially increase the impact
-  of host compromise. Keep repository scope and app access narrow.

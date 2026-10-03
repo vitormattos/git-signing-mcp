@@ -19,18 +19,38 @@ install -d -m 700 secrets
 install -d -m 700 -o 100 -g 100 volumes/openbao
 ```
 
-## B. Bootstrap OpenBao
+## B. Create the OpenBao auto-unseal key
+
+```bash
+(
+  umask 077
+  openssl rand -out secrets/openbao_static_seal_key 32
+)
+chmod 0444 secrets/openbao_static_seal_key
+test "$(wc -c < secrets/openbao_static_seal_key)" -eq 32
+```
+
+Store a separate backup of this key outside the VPS. Do not place it in the same
+backup archive as `volumes/openbao`.
+
+## C. Bootstrap OpenBao
+
+For a fresh installation:
 
 ```bash
 docker compose up -d openbao
-docker compose exec openbao bao operator init -key-shares=3 -key-threshold=2
+docker compose exec openbao bao operator init \
+  -recovery-shares=1 \
+  -recovery-threshold=1
 ```
 
-Store all three unseal shares and the initial root token in the external password
-manager. Unseal with two different shares.
+Store the recovery key and initial root token outside the VPS. Confirm
+`Sealed false`; no manual unseal is required.
 
-Load the root token temporarily, enable KV v2 and AppRole, create the policy and
-role, then store:
+For an existing Shamir installation, stop here and follow the migration section
+in `docs/openbao.md`. Do not reinitialize an existing data volume.
+
+Enable KV v2 and AppRole, create the policy/role, and store:
 
 ```text
 secret/git-signing/signing
@@ -41,18 +61,16 @@ secret/git-signing/github
 └── token
 ```
 
-Use `docs/openbao.md` for the exact commands.
-
-Create AppRole credentials and write:
+Create AppRole credentials in:
 
 ```text
 secrets/openbao_role_id
 secrets/openbao_secret_id
 ```
 
-Then `unset BAO_TOKEN`.
+Then remove the bootstrap token from the shell.
 
-## C. Configure GitHub authentication
+## D. Configure GitHub authentication
 
 Use a dedicated fine-grained PAT. The current personal deployment intentionally
 uses a broad repository scope because the VPS and signer are dedicated to the
@@ -64,25 +82,9 @@ same operator:
 - Workflows: Read and write;
 - Actions: Read and write.
 
-`Workflows` is required when this service must update files under
-`.github/workflows/`. `Actions` is broader than the minimum required for a
-plain Git push and is enabled intentionally for this deployment.
+Store the PAT in the external password manager and OpenBao.
 
-The MCP-level repository policy is also intentionally broad:
-
-```text
-ALLOWED_REPOSITORIES=*/*
-```
-
-Direct writes to protected branches remain disabled. A different deployment can
-and should narrow both the PAT repository scope and `ALLOWED_REPOSITORIES` when
-that broader access is unnecessary.
-
-Store the PAT both in the external password manager and OpenBao.
-
-## D. Configure the signing identity
-
-For the current personal OpenPGP deployment:
+## E. Configure the signing identity
 
 ```text
 GIT_IDENTITY_NAME=Vitor Mattos
@@ -96,7 +98,7 @@ OPENBAO_SIGNING_PASSPHRASE_FIELD=passphrase
 
 The matching public GPG key must already be registered with GitHub.
 
-## E. Create the Secure MCP Tunnel
+## F. Create the Secure MCP Tunnel
 
 In OpenAI Platform:
 
@@ -106,11 +108,8 @@ In OpenAI Platform:
 4. restrict it to Tunnels Read + Use;
 5. save it in the external password manager.
 
-Set the tunnel ID in `.env` and write the runtime key to:
-
-```text
-secrets/openai_tunnel_runtime_api_key
-```
+Set the tunnel ID in `.env` and write the runtime key to
+`secrets/openai_tunnel_runtime_api_key`.
 
 Generate the internal shared secret:
 
@@ -121,10 +120,7 @@ Generate the internal shared secret:
 )
 ```
 
-## F. Fix file-backed secret permissions
-
-The containers run as non-root users. Keep the directory private but the mounted
-files readable:
+## G. Fix file-backed secret permissions
 
 ```bash
 chmod 700 secrets
@@ -132,12 +128,11 @@ chmod 0444 \
   secrets/openai_tunnel_runtime_api_key \
   secrets/mcp_tunnel_shared_secret \
   secrets/openbao_role_id \
-  secrets/openbao_secret_id
+  secrets/openbao_secret_id \
+  secrets/openbao_static_seal_key
 ```
 
-Do not print these files.
-
-## G. Validate Compose
+## H. Validate Compose
 
 ```bash
 docker compose config --quiet
@@ -146,81 +141,41 @@ docker compose config | grep -n "published:"
 
 The second command must return nothing.
 
-## H. Normal startup
-
-Start OpenBao first:
+## I. Normal startup and reboot
 
 ```bash
 docker compose up -d openbao
-docker compose exec openbao bao status || true
-```
-
-If sealed:
-
-```bash
-docker compose exec openbao bao operator unseal
-docker compose exec openbao bao operator unseal
-```
-
-Use two different shares. Confirm `Sealed false`.
-
-Then:
-
-```bash
-docker compose pull
+docker compose exec openbao bao status
 docker compose up -d --build mcp tunnel-client
 docker compose ps
-docker compose logs --tail=100 mcp
-docker compose logs --tail=100 tunnel-client
 ```
 
-Expected:
+OpenBao should report `Initialized true` and `Sealed false` automatically.
+No recovery key or root token is needed for a routine restart.
 
-- OpenBao healthy and unsealed;
-- MCP healthy;
-- tunnel client running/connected;
-- no published host ports.
-
-## I. Connect ChatGPT
+## J. Connect ChatGPT
 
 Create a developer-mode custom MCP app using the tunnel connection. Keep the app
 private and do not publish/share it.
 
 Validate `get_identity`, then `verify_commit`, then one
 `create_signed_git_commit` on a disposable feature branch. After an upgrade,
-confirm `tool_schema_version` and rescan the ChatGPT app tools. If an existing
-conversation still exposes an older tool schema, start a new conversation before
-testing newly added request fields.
+confirm `tool_schema_version` and rescan the ChatGPT app tools.
 
-## J. Recovery after reboot
+## K. Recovery inventory
 
-```bash
-cd /path/to/git-signing-mcp
-docker compose up -d openbao
-docker compose exec openbao bao status || true
-```
+Keep outside the VPS:
 
-Unseal with two different shares if necessary, then:
-
-```bash
-docker compose up -d --build mcp tunnel-client
-```
-
-## K. Password-manager inventory
-
-Keep at minimum:
-
-- all 3 OpenBao unseal shares;
-- OpenBao initial root token;
-- personal GPG private key backup and its passphrase, if this deployment reuses it;
+- one backup of the 32-byte static auto-unseal key;
+- OpenBao recovery key material;
+- OpenBao initial root token, if retained for administration;
+- personal GPG private-key backup and passphrase, if this deployment reuses it;
 - fine-grained GitHub PAT plus scope and expiration;
 - OpenAI tunnel runtime API key plus expiration;
-- tunnel ID and workspace association;
-- notes describing VPS, OpenBao threshold 2/3, and rotation dates.
+- notes describing the VPS and rotation dates.
 
-The AppRole Role ID is not a password by itself; the Secret ID is sensitive. It
-may also be backed up if your recovery policy requires it, otherwise regenerate
-it with the root/admin credential after recovery.
+Do not store the static key backup in the same backup object/archive as the
+OpenBao data volume.
 
 ## L. Update
 
@@ -228,19 +183,13 @@ it with the root/admin credential after recovery.
 git pull --ff-only
 docker compose pull
 docker compose up -d openbao
-```
-
-If OpenBao restarted, unseal it before starting the MCP:
-
-```bash
 docker compose up -d --build mcp tunnel-client
 docker compose ps
 ```
 
+OpenBao should auto-unseal after its container restarts.
 
 ## M. Post-upgrade smoke test
-
-After pulling and rebuilding the MCP, validate the final production path:
 
 ```text
 get_identity
@@ -252,16 +201,3 @@ create_signed_git_commit on a disposable feature branch
 verify_commit
   -> cryptographic_verification=true
 ```
-
-When the refreshed ChatGPT tool schema exposes it, prefer a unified `patch` for
-existing diffs. For a latency-sensitive workflow, test
-`wait_for_verification=false` only when an explicit `verify_commit` follows.
-
-Measure the server-side write time with:
-
-```bash
-docker compose logs --tail=200 mcp | grep '"event":"commit.completed"'
-```
-
-The audit event exposes `duration_ms` and `verification_attempts` without
-logging file contents or credentials.

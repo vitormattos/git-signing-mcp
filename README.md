@@ -79,8 +79,10 @@ Additional references:
 - `docs/security.md`;
 - `docs/signing.md`.
 
-Do not start the complete stack until OpenBao has been initialized and unsealed
+Do not start the complete stack until OpenBao has been initialized, is unsealed,
 and contains the signing key, optional OpenPGP passphrase, and GitHub credential.
+The tracked local deployment uses Static Key Auto Unseal, so normal OpenBao or VPS
+restarts do not require manual unseal shares.
 
 ## Local development
 
