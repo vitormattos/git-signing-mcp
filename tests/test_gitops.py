@@ -164,18 +164,28 @@ def test_openpgp_key_cache_uses_separate_home_per_key_version(tmp_path: Path, mo
 
 def test_repository_cache_uses_worktrees_instead_of_clones(tmp_path: Path, monkeypatch):
     calls = []
+    fetched = []
 
     def fake_run(args, cwd, env, *, input_text=None):
         calls.append(args)
+        if args[:3] == ["git", "rev-parse", "__mcp_source"]:
+            return "abc123"
         return ""
 
+    def fake_fetch(cache, branch, env):
+        fetched.append(branch)
+        return True
+
     monkeypatch.setattr(gitops, "_run", fake_run)
+    monkeypatch.setattr(gitops, "_fetch_remote_branch", fake_fetch)
     cache = gitops.RepositoryCache(str(tmp_path / "repos"))
 
     for index in range(2):
         with cache.worktree(
             repository="owner/repo",
-            source_branch="main",
+            branch="main",
+            base_branch="main",
+            expected_head_sha=None,
             destination=tmp_path / f"work-{index}",
             env={},
             auth_env={},
@@ -183,13 +193,12 @@ def test_repository_cache_uses_worktrees_instead_of_clones(tmp_path: Path, monke
             pass
 
     init_calls = [call for call in calls if call[:4] == ["git", "init", "--quiet", "--bare"]]
-    fetch_calls = [call for call in calls if call[:2] == ["git", "fetch"]]
     clone_calls = [call for call in calls if call[:2] == ["git", "clone"]]
     add_calls = [call for call in calls if call[:3] == ["git", "worktree", "add"]]
     remove_calls = [call for call in calls if call[:3] == ["git", "worktree", "remove"]]
 
     assert len(init_calls) == 1
-    assert len(fetch_calls) == 2
+    assert fetched == ["main", "main"]
     assert clone_calls == []
     assert len(add_calls) == 2
     assert len(remove_calls) == 2
@@ -221,12 +230,15 @@ def test_repository_cache_prunes_after_remove_failure(tmp_path: Path, monkeypatc
         return ""
 
     monkeypatch.setattr(gitops, "_run", fake_run)
+    monkeypatch.setattr(gitops, "_fetch_remote_branch", lambda *args: True)
     cache = gitops.RepositoryCache(str(tmp_path / "repos"))
     destination = tmp_path / "work"
 
     with cache.worktree(
         repository="owner/repo",
-        source_branch="main",
+        branch="main",
+        base_branch="main",
+        expected_head_sha=None,
         destination=destination,
         env={},
         auth_env={},
@@ -235,3 +247,65 @@ def test_repository_cache_prunes_after_remove_failure(tmp_path: Path, monkeypatc
 
     assert not destination.exists()
     assert ["git", "worktree", "prune"] in calls
+
+
+def test_repository_cache_rejects_stale_expected_head(tmp_path: Path, monkeypatch):
+    def fake_run(args, cwd, env, *, input_text=None):
+        if args[:3] == ["git", "rev-parse", "__mcp_source"]:
+            return "current-head"
+        return ""
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    monkeypatch.setattr(gitops, "_fetch_remote_branch", lambda *args: True)
+    cache = gitops.RepositoryCache(str(tmp_path / "repos"))
+
+    with pytest.raises(ValueError, match="branch HEAD changed"):
+        with cache.worktree(
+            repository="owner/repo",
+            branch="feature/example",
+            base_branch="main",
+            expected_head_sha="stale-head",
+            destination=tmp_path / "work",
+            env={},
+            auth_env={},
+        ):
+            pass
+
+
+def test_repository_cache_falls_back_to_base_for_new_branch(tmp_path: Path, monkeypatch):
+    fetched = []
+
+    def fake_run(args, cwd, env, *, input_text=None):
+        return ""
+
+    def fake_fetch(cache, branch, env):
+        fetched.append(branch)
+        return branch == "main"
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    monkeypatch.setattr(gitops, "_fetch_remote_branch", fake_fetch)
+    cache = gitops.RepositoryCache(str(tmp_path / "repos"))
+
+    with cache.worktree(
+        repository="owner/repo",
+        branch="feature/new",
+        base_branch="main",
+        expected_head_sha=None,
+        destination=tmp_path / "work",
+        env={},
+        auth_env={},
+    ):
+        pass
+
+    assert fetched == ["feature/new", "main"]
+
+
+def test_fetch_remote_branch_treats_missing_ref_as_absent(tmp_path: Path, monkeypatch):
+    class Result:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: couldn't find remote ref refs/heads/missing\n"
+
+    monkeypatch.setattr(gitops.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert gitops._fetch_remote_branch(tmp_path, "missing", {}) is False

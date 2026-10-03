@@ -115,6 +115,43 @@ def _run(
     return process.stdout.strip()
 
 
+def _fetch_remote_branch(
+    cache: Path,
+    branch: str,
+    env: dict[str, str],
+) -> bool:
+    args = [
+        "git",
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--depth=1",
+        "origin",
+        f"+refs/heads/{branch}:refs/heads/__mcp_source",
+    ]
+    process = subprocess.run(
+        args,
+        cwd=cache,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode == 0:
+        return True
+    if "couldn't find remote ref" in process.stderr:
+        return False
+
+    logger.error(
+        "subprocess failed: executable=%s args=%r returncode=%s stderr=%r",
+        Path(args[0]).name,
+        _safe_args(args),
+        process.returncode,
+        _redact(process.stderr[-4000:]),
+    )
+    raise RuntimeError("Git operation failed")
+
+
 class RepositoryCache:
     """Keep shallow bare repositories in tmpfs and attach per-request worktrees."""
 
@@ -137,7 +174,9 @@ class RepositoryCache:
         self,
         *,
         repository: str,
-        source_branch: str,
+        branch: str,
+        base_branch: str,
+        expected_head_sha: str | None,
         destination: Path,
         env: dict[str, str],
         auth_env: dict[str, str],
@@ -153,19 +192,17 @@ class RepositoryCache:
                     cache,
                     env,
                 )
-            _run(
-                [
-                    "git",
-                    "fetch",
-                    "--quiet",
-                    "--prune",
-                    "--depth=1",
-                    "origin",
-                    f"+refs/heads/{source_branch}:refs/heads/__mcp_source",
-                ],
-                cache,
-                auth_env,
-            )
+            branch_exists = _fetch_remote_branch(cache, branch, auth_env)
+            if branch_exists:
+                source_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
+                if expected_head_sha is not None and source_sha != expected_head_sha:
+                    raise ValueError("branch HEAD changed; refresh before writing")
+            else:
+                if expected_head_sha is not None:
+                    raise ValueError("branch HEAD changed; refresh before writing")
+                if not _fetch_remote_branch(cache, base_branch, auth_env):
+                    raise ValueError("base branch does not exist")
+
             _run(
                 [
                     "git",
@@ -388,7 +425,7 @@ def create_signed_commit(
     repository: str,
     branch: str,
     base_branch: str,
-    branch_exists: bool,
+    expected_head_sha: str | None,
     changes: list[FileChange],
     patch: str | None,
     message: str,
@@ -405,10 +442,11 @@ def create_signed_commit(
         env = _git_identity_env(_base_subprocess_env(process_home), settings)
         git_auth_env = _git_auth_env(env, github_token)
 
-        source_branch = branch if branch_exists else base_branch
         with repository_cache.worktree(
             repository=repository,
-            source_branch=source_branch,
+            branch=branch,
+            base_branch=base_branch,
+            expected_head_sha=expected_head_sha,
             destination=destination,
             env=env,
             auth_env=git_auth_env,

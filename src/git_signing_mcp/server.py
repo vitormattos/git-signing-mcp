@@ -121,17 +121,6 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
         validate_branch_name(request.base_branch)
 
         with write_guard.hold():
-            current_head = github.branch_sha(request.repository, request.branch)
-            branch_exists = current_head is not None
-
-            if request.expected_head_sha is not None and current_head != request.expected_head_sha:
-                raise ValueError("branch HEAD changed; refresh before writing")
-
-            if not branch_exists:
-                base_head = github.branch_sha(request.repository, request.base_branch)
-                if base_head is None:
-                    raise ValueError("base branch does not exist")
-
             signing_key, signing_passphrase = secrets.signing_material()
             commit_sha = create_signed_commit(
                 settings=settings,
@@ -141,7 +130,7 @@ def create_signed_git_commit(request: CommitRequest) -> CommitResult:
                 repository=request.repository,
                 branch=request.branch,
                 base_branch=request.base_branch,
-                branch_exists=branch_exists,
+                expected_head_sha=request.expected_head_sha,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,
