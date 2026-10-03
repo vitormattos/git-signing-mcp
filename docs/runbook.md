@@ -79,8 +79,13 @@ same operator:
 - Repository access: All repositories;
 - Metadata: Read-only;
 - Contents: Read and write;
-- Workflows: Read and write;
-- Actions: Read and write.
+- Workflows: Read and write only if this signer is allowed to modify files under
+  `.github/workflows/`;
+- Actions: not required by the MCP itself.
+
+The MCP uses Git over HTTPS for fetch/push and the GitHub commits API for
+signature verification. Keep any broader PAT permission only when another
+documented workflow requires it.
 
 Store the PAT in the external password manager and OpenBao.
 
@@ -140,6 +145,9 @@ docker compose config | grep -n "published:"
 ```
 
 The second command must return nothing.
+
+The effective local topology must have `tunnel-client` only on `frontend`,
+`openbao` only on the internal `backend` network, and `mcp` on both.
 
 ## I. Normal startup and reboot
 

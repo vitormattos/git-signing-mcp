@@ -50,7 +50,7 @@ services:
       - openbao_role_id
       - openbao_secret_id
     networks:
-      - private
+      frontend:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     read_only: true
@@ -92,7 +92,7 @@ services:
       - openai_tunnel_runtime_api_key
       - mcp_tunnel_shared_secret
     networks:
-      - private
+      frontend:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -102,7 +102,7 @@ services:
       - no-new-privileges:true
 
 networks:
-  private:
+  frontend:
     driver: bridge
 
 secrets:

@@ -34,8 +34,10 @@ Write it to `secrets/openai_tunnel_runtime_api_key` as described in
 
 ## 3. Start the VPS stack
 
-OpenBao must be unsealed first. Then start `mcp` and `tunnel-client` and wait
-for the MCP to report healthy:
+OpenBao must be initialized and healthy first. In the static auto-unseal
+deployment, a normal restart should return it to `Sealed false` automatically;
+do not perform a routine manual unseal. Then start `mcp` and `tunnel-client`
+and wait for the MCP to report healthy:
 
 ```bash
 docker compose ps

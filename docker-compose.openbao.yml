@@ -8,7 +8,7 @@
 
 services:
   openbao:
-    image: openbao/openbao:2.7.1
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
     restart: unless-stopped
     command:
       - server
@@ -20,7 +20,7 @@ services:
     secrets:
       - openbao_static_seal_key
     networks:
-      - private
+      backend:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -41,11 +41,18 @@ services:
       start_period: 5s
 
   mcp:
+    networks:
+      backend:
     depends_on:
       openbao:
         condition: service_healthy
     environment:
       OPENBAO_ADDR: http://openbao:8200
+
+networks:
+  backend:
+    driver: bridge
+    internal: true
 
 secrets:
   openbao_static_seal_key:

@@ -81,7 +81,9 @@ chmod 0444 \
 ```
 
 The static seal key is mounted only into OpenBao. The AppRole credentials are
-mounted only into the MCP, and the tunnel credentials only where needed.
+mounted only into the MCP. The OpenAI runtime API key is mounted only into the
+tunnel client, while the local MCP shared secret is mounted into the tunnel
+client and MCP.
 
 ## 5. Configure `.env`
 
@@ -133,7 +135,19 @@ process/container. The default 300-second secret cache can be disabled with
 `SECRET_CACHE_TTL_SECONDS=0`. The repository and GPG directories are under the
 MCP's `/tmp` tmpfs by default and disappear when the container is recreated.
 
-## 6. Validate before startup
+## 6. Network topology
+
+The production topology is segmented:
+
+```text
+tunnel-client -> frontend -> mcp -> backend (internal) -> openbao
+```
+
+Only the MCP joins both networks. OpenBao is not reachable directly from the
+tunnel client and has no published host port. Because MCP also joins the normal
+frontend bridge, it keeps outbound access to GitHub.
+
+## 7. Validate before startup
 
 ```bash
 docker compose config --quiet
@@ -155,7 +169,7 @@ ls -l \
   secrets/openbao_static_seal_key
 ```
 
-## 7. Start after a normal restart
+## 8. Start after a normal restart
 
 ```bash
 docker compose up -d openbao
@@ -176,7 +190,7 @@ which means the process is reachable and the node is unsealed. The MCP waits for
 that health state. Use `bao operator init -status` when you specifically need to
 distinguish an uninitialized node from a sealed initialized node.
 
-## 8. Updating
+## 9. Updating
 
 ```bash
 git pull --ff-only
@@ -189,7 +203,7 @@ docker compose ps
 An OpenBao restart should auto-unseal as long as the static seal key file and
 persistent OpenBao volume remain available.
 
-## 9. Recovery boundaries
+## 10. Recovery boundaries
 
 - Recreate only the OpenBao container: persistent data and static key remain;
   OpenBao auto-unseals.

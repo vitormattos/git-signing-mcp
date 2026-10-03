@@ -10,5 +10,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 dist
+volumes
 secrets
+secrets-local
 docker-compose.override.yml
