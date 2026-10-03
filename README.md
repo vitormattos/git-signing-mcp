@@ -6,96 +6,50 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # git-signing-mcp
 
 Self-hosted MCP server for creating Git commits with a fixed server-side identity,
-a matching DCO Signed-off-by trailer, and an SSH or OpenPGP cryptographic
-signature.
+matching DCO `Signed-off-by` trailer, and SSH or OpenPGP signature.
 
-The production deployment uses **OpenAI Secure MCP Tunnel**. The MCP server has
-no public URL, no published Docker port, and no reverse-proxy route.
+The production deployment uses OpenAI Secure MCP Tunnel. The MCP has no public
+URL or published Docker port and stores signing material and GitHub credentials
+in OpenBao.
 
-## Deployment topology
+## Architecture
 
 ```text
-ChatGPT private custom app
-        |
-        | OpenAI Secure MCP Tunnel
-        v
-OpenAI tunnel control plane
-        ^
-        | outbound HTTPS only
-        |
+ChatGPT
+   |
+OpenAI Secure MCP Tunnel
+   |
 tunnel-client
-        |
-        | private Docker network + shared secret
-        v
-git-signing-mcp ------> OpenBao
-        |
-        +--> repository/branch policy
-        +--> DCO normalization
-        +--> signed Git commit
-        v
-GitHub
+   |
+git-signing-mcp ---- OpenBao
+   |
+ GitHub
 ```
 
-The MCP image is published to GitHub Container Registry after successful pushes
-to `main`:
+The MCP enforces repository and protected-branch policies, normalizes the DCO
+identity, signs commits, pushes them to GitHub, and can verify GitHub's
+cryptographic signature result.
+
+## Container image
+
+The image is published to GitHub Container Registry after successful pushes to
+`main`:
 
 ```text
 ghcr.io/vitormattos/git-signing-mcp:latest
 ghcr.io/vitormattos/git-signing-mcp:sha-<git-sha>
 ```
 
-Pull requests lint, build, and smoke-test the image but never publish it.
-Published builds include SBOM and provenance attestations, and Buildx reuses the
-GitHub Actions cache between builds. The GHCR package should be made public after
-its first publication when anonymous production pulls are desired.
+Pull requests lint, build, and smoke-test the image without publishing it.
 
-The canonical Docker Compose stack consumes the published MCP image and includes
-the OpenAI tunnel client and local OpenBao service. Prepare the persistent
-OpenBao directory before first startup:
+## Documentation
 
-```bash
-install -d -m 700 -o 100 -g 100 volumes/openbao
-```
-
-`secrets/`, `secrets-local/`, `volumes/`, and local
-`docker-compose.override.yml` customizations are ignored by Git.
-
-## What it provides
-
-- private Streamable HTTP MCP endpoint;
-- OpenAI Secure MCP Tunnel sidecar;
-- fixed server-side Git/DCO identity;
-- SSH and passphrase-protected OpenPGP commit signing;
-- GitHub verification after push;
-- repository and protected-branch policies;
-- no force pushes;
-- path/symlink protections;
-- rate and concurrency limits;
-- structured audit events without secret contents, including write latency;
-- shallow bare-repository caching with temporary Git worktrees;
-- OpenBao AppRole + KV v2 integration;
-- local single-node OpenBao deployment with persistent PebbleDB;
-- file-backed runtime secrets;
-- CI and Dependabot coverage.
-
-## Start here
-
-For a fresh VPS, follow:
-
-1. `docs/runbook.md` — complete end-to-end checklist;
-2. `docs/openbao.md` — OpenBao bootstrap and recovery details;
-3. `docs/deployment.md` — runtime/Compose operations;
-4. `docs/chatgpt.md` — private ChatGPT tunnel/app connection.
-
-Additional references:
-
-- `docs/security.md`;
-- `docs/signing.md`.
-
-Do not start the complete stack until OpenBao has been initialized, is unsealed,
-and contains the signing key, optional OpenPGP passphrase, and GitHub credential.
-The tracked local deployment uses Static Key Auto Unseal, so normal OpenBao or VPS
-restarts do not require manual unseal shares.
+- [VPS runbook](docs/runbook.md): complete installation and update procedure.
+- [Deployment](docs/deployment.md): Docker Compose, runtime configuration, and operations.
+- [OpenBao](docs/openbao.md): bootstrap, auto-unseal, migration, and recovery.
+- [ChatGPT integration](docs/chatgpt.md): Secure MCP Tunnel and private app setup.
+- [Security architecture](docs/security.md): threat model, secrets, networks, and hardening.
+- [Commit signing](docs/signing.md): SSH/OpenPGP signing, DCO, caches, and verification.
 
 ## Local development
 
@@ -105,4 +59,11 @@ python -m venv .venv
 pip install -e ".[dev]"
 ruff check src tests scripts
 pytest -q
+```
+
+Build and run a local image with:
+
+```bash
+make build
+make up
 ```
