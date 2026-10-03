@@ -116,7 +116,7 @@ def _run(
 
 
 class RepositoryCache:
-    """Keep shallow bare repositories in tmpfs and seed per-request worktrees from them."""
+    """Keep shallow bare repositories in tmpfs and attach per-request worktrees."""
 
     def __init__(self, root: str) -> None:
         self.root = Path(root)
@@ -132,7 +132,8 @@ class RepositoryCache:
         digest = hashlib.sha256(repository.encode()).hexdigest()[:20]
         return self.root / f"{digest}.git"
 
-    def checkout(
+    @contextmanager
+    def worktree(
         self,
         *,
         repository: str,
@@ -140,9 +141,10 @@ class RepositoryCache:
         destination: Path,
         env: dict[str, str],
         auth_env: dict[str, str],
-    ) -> None:
+    ) -> Iterator[Path]:
         cache = self._path_for(repository)
-        with self._lock_for(repository):
+        lock = self._lock_for(repository)
+        with lock:
             if not cache.exists():
                 cache.mkdir(mode=0o700)
                 _run(["git", "init", "--quiet", "--bare"], cache, env)
@@ -167,122 +169,169 @@ class RepositoryCache:
             _run(
                 [
                     "git",
-                    "clone",
+                    "worktree",
+                    "add",
                     "--quiet",
-                    "--no-hardlinks",
-                    "--branch",
-                    "__mcp_source",
-                    str(cache),
+                    "--detach",
                     str(destination),
+                    "__mcp_source",
                 ],
                 cache,
                 env,
             )
 
-        _run(["git", "checkout", "--quiet", "-B", "work", "__mcp_source"], destination, env)
-        _run(
-            ["git", "remote", "set-url", "origin", f"https://github.com/{repository}.git"],
-            destination,
-            env,
-        )
+        try:
+            yield destination
+        finally:
+            with lock:
+                try:
+                    _run(
+                        ["git", "worktree", "remove", "--force", str(destination)],
+                        cache,
+                        env,
+                    )
+                except RuntimeError:
+                    logger.warning(
+                        "failed to remove cached worktree; pruning stale metadata: %s",
+                        destination,
+                    )
+                    try:
+                        _run(["git", "worktree", "prune"], cache, env)
+                    except RuntimeError:
+                        logger.warning("failed to prune repository cache: %s", repository)
 
 
 class OpenPGPKeyCache:
-    """Import an OpenPGP key once per key version into a reusable tmpfs GNUPGHOME."""
+    """Import each OpenPGP key version once into a reusable tmpfs GNUPGHOME."""
 
     def __init__(self, root: str) -> None:
         self.root = Path(root)
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
-        self._key_digest: str | None = None
-        self._fingerprint: str | None = None
+        self._fingerprints: dict[str, str] = {}
 
-    def _prepare(
+    def prepare(
         self,
         key_material: str,
         env: dict[str, str],
         cwd: Path,
     ) -> tuple[dict[str, str], str]:
         digest = hashlib.sha256(key_material.encode()).hexdigest()
-        if digest == self._key_digest and self._fingerprint and self.root.exists():
-            return env | {"GNUPGHOME": str(self.root)}, self._fingerprint
+        home = self.root / digest[:24]
+        marker = home / ".fingerprint"
 
-        if self.root.exists():
-            shutil.rmtree(self.root)
-        self.root.mkdir(parents=True, mode=0o700)
-        key_path = self.root / "private.asc"
-        key_path.write_text(key_material, encoding="utf-8")
-        key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        gpg_env = env | {"GNUPGHOME": str(self.root)}
-        try:
-            _run(["gpg", "--batch", "--import", str(key_path)], cwd, gpg_env)
-        finally:
-            key_path.unlink(missing_ok=True)
-        listing = _run(
-            ["gpg", "--batch", "--with-colons", "--list-secret-keys"],
-            cwd,
-            gpg_env,
-        )
-        fingerprints = [
-            line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
-        ]
-        if not fingerprints:
-            raise RuntimeError("OpenPGP signing key is unusable")
-        self._key_digest = digest
-        self._fingerprint = fingerprints[0]
-        return gpg_env, fingerprints[0]
-
-    @contextmanager
-    def use(
-        self,
-        key_material: str,
-        env: dict[str, str],
-        cwd: Path,
-    ) -> Iterator[tuple[dict[str, str], str]]:
         with self._lock:
-            yield self._prepare(key_material, env, cwd)
+            fingerprint = self._fingerprints.get(digest)
+            if fingerprint and home.exists():
+                return env | {"GNUPGHOME": str(home)}, fingerprint
+
+            if marker.exists():
+                fingerprint = marker.read_text(encoding="utf-8").strip()
+                if fingerprint:
+                    self._fingerprints[digest] = fingerprint
+                    return env | {"GNUPGHOME": str(home)}, fingerprint
+
+            if home.exists():
+                shutil.rmtree(home)
+            home.mkdir(parents=True, mode=0o700)
+            key_path = home / "private.asc"
+            key_path.write_text(key_material, encoding="utf-8")
+            key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            gpg_env = env | {"GNUPGHOME": str(home)}
+            try:
+                _run(["gpg", "--batch", "--import", str(key_path)], cwd, gpg_env)
+            finally:
+                key_path.unlink(missing_ok=True)
+
+            listing = _run(
+                ["gpg", "--batch", "--with-colons", "--list-secret-keys"],
+                cwd,
+                gpg_env,
+            )
+            fingerprints = [
+                line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")
+            ]
+            if not fingerprints:
+                raise RuntimeError("OpenPGP signing key is unusable")
+
+            fingerprint = fingerprints[0]
+            marker.write_text(fingerprint, encoding="utf-8")
+            marker.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            self._fingerprints[digest] = fingerprint
+            return gpg_env, fingerprint
 
 
-def _configure_identity(repo: Path, env: dict[str, str], settings: Settings) -> None:
-    _run(["git", "config", "user.name", settings.git_identity_name], repo, env)
-    _run(["git", "config", "user.email", settings.git_identity_email], repo, env)
-    _run(["git", "config", "commit.gpgsign", "true"], repo, env)
+def _git_identity_env(base_env: dict[str, str], settings: Settings) -> dict[str, str]:
+    env = base_env.copy()
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": settings.git_identity_name,
+            "GIT_AUTHOR_EMAIL": settings.git_identity_email,
+            "GIT_COMMITTER_NAME": settings.git_identity_name,
+            "GIT_COMMITTER_EMAIL": settings.git_identity_email,
+        }
+    )
+    return env
 
 
-def _configure_ssh_signing(
+def _commit_with_ssh_signature(
     repo: Path,
     env: dict[str, str],
     key_material: str,
     secret_dir: Path,
+    message: str,
 ) -> None:
     key_path = secret_dir / "signing_key"
     key_path.write_text(key_material, encoding="utf-8")
     key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     _run(["ssh-keygen", "-y", "-f", str(key_path)], repo, env)
-    _run(["git", "config", "gpg.format", "ssh"], repo, env)
-    _run(["git", "config", "user.signingkey", str(key_path)], repo, env)
+    _run(
+        [
+            "git",
+            "-c",
+            "gpg.format=ssh",
+            "commit",
+            "--quiet",
+            f"--gpg-sign={key_path}",
+            "-m",
+            message,
+        ],
+        repo,
+        env,
+    )
 
 
-def _configure_openpgp_signing(
+def _commit_with_openpgp_signature(
     repo: Path,
     env: dict[str, str],
     fingerprint: str,
     passphrase: str | None,
     secret_dir: Path,
-) -> dict[str, str]:
-    _run(["git", "config", "gpg.format", "openpgp"], repo, env)
-    _run(["git", "config", "user.signingkey", fingerprint], repo, env)
+    message: str,
+) -> None:
+    commit_env = env
+    args = ["git", "-c", "gpg.format=openpgp"]
 
-    if passphrase is None:
-        return env
+    if passphrase is not None:
+        passphrase_path = secret_dir / "openpgp_passphrase"
+        passphrase_path.write_text(passphrase, encoding="utf-8")
+        passphrase_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        wrapper = shutil.which("git-signing-gpg-wrapper", path=env.get("PATH"))
+        if not wrapper:
+            raise RuntimeError("git-signing-gpg-wrapper is not installed")
+        commit_env = env | {"GIT_SIGNING_PASSPHRASE_FILE": str(passphrase_path)}
+        args.extend(["-c", f"gpg.program={wrapper}"])
 
-    passphrase_path = secret_dir / "openpgp_passphrase"
-    passphrase_path.write_text(passphrase, encoding="utf-8")
-    passphrase_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    wrapper = shutil.which("git-signing-gpg-wrapper", path=env.get("PATH"))
-    if not wrapper:
-        raise RuntimeError("git-signing-gpg-wrapper is not installed")
-    _run(["git", "config", "gpg.program", wrapper], repo, env)
-    return env | {"GIT_SIGNING_PASSPHRASE_FILE": str(passphrase_path)}
+    args.extend(
+        [
+            "commit",
+            "--quiet",
+            f"--gpg-sign={fingerprint}",
+            "-m",
+            message,
+        ]
+    )
+    _run(args, repo, commit_env)
 
 
 def _apply_file_changes(
@@ -347,62 +396,65 @@ def create_signed_commit(
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="git-signing-mcp-") as temp:
         root = Path(temp)
-        repo = root / "repo"
+        destination = root / "repo"
         secret_dir = root / "secrets"
         process_home = root / "home"
         secret_dir.mkdir(mode=0o700)
         process_home.mkdir(mode=0o700)
-        env = _base_subprocess_env(process_home)
+        env = _git_identity_env(_base_subprocess_env(process_home), settings)
         git_auth_env = _git_auth_env(env, github_token)
 
         source_branch = branch if branch_exists else base_branch
-        repository_cache.checkout(
+        with repository_cache.worktree(
             repository=repository,
             source_branch=source_branch,
-            destination=repo,
+            destination=destination,
             env=env,
             auth_env=git_auth_env,
-        )
-        _configure_identity(repo, env, settings)
+        ) as repo:
+            if patch is not None:
+                _apply_patch(repo, env, patch, settings)
+            else:
+                _apply_file_changes(repo, changes, settings)
 
-        if patch is not None:
-            _apply_patch(repo, env, patch, settings)
-        else:
-            _apply_file_changes(repo, changes, settings)
+            _run(["git", "add", "--all"], repo, env)
+            staged_paths = _run(["git", "diff", "--cached", "--name-only"], repo, env)
+            if not staged_paths:
+                raise ValueError("the requested changes produce an empty commit")
 
-        _run(["git", "add", "--all"], repo, env)
-        status = _run(["git", "status", "--porcelain"], repo, env)
-        if not status:
-            raise ValueError("the requested changes produce an empty commit")
+            final_message = normalize_commit_message(
+                message,
+                settings.git_identity_name,
+                settings.git_identity_email,
+            )
 
-        final_message = normalize_commit_message(
-            message,
-            settings.git_identity_name,
-            settings.git_identity_email,
-        )
-
-        if settings.signing_format == "ssh":
-            _configure_ssh_signing(repo, env, signing_key, secret_dir)
-            _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, env)
-        else:
-            with openpgp_cache.use(signing_key, env, repo) as (gpg_env, fingerprint):
-                signing_env = _configure_openpgp_signing(
+            if settings.signing_format == "ssh":
+                _commit_with_ssh_signature(
+                    repo,
+                    env,
+                    signing_key,
+                    secret_dir,
+                    final_message,
+                )
+            else:
+                gpg_env, fingerprint = openpgp_cache.prepare(signing_key, env, repo)
+                _commit_with_openpgp_signature(
                     repo,
                     gpg_env,
                     fingerprint,
                     signing_passphrase,
                     secret_dir,
+                    final_message,
                 )
-                _run(["git", "commit", "--quiet", "-S", "-m", final_message], repo, signing_env)
 
-        commit_sha = _run(["git", "rev-parse", "HEAD"], repo, env)
-        raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
-        if "\ngpgsig " not in f"\n{raw_commit}":
-            raise RuntimeError("Git produced an unsigned commit")
+            commit_sha = _run(["git", "rev-parse", "HEAD"], repo, env)
+            raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
+            if "\ngpgsig " not in f"\n{raw_commit}":
+                raise RuntimeError("Git produced an unsigned commit")
 
-        _run(
-            ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"],
-            repo,
-            git_auth_env,
-        )
-        return commit_sha
+            _run(
+                ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"],
+                repo,
+                git_auth_env,
+            )
+            return commit_sha

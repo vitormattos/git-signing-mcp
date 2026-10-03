@@ -42,6 +42,13 @@ class CommitRequest(BaseModel):
             "The patch is validated with git apply --check before it is applied."
         ),
     )
+    wait_for_verification: bool = Field(
+        default=True,
+        description=(
+            "Wait for GitHub to report the pushed signature as verified. "
+            "Set false for lower latency when the caller will verify separately."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_change_source(self) -> "CommitRequest":
