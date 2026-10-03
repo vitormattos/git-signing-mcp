@@ -36,9 +36,22 @@ git-signing-mcp ------> OpenBao
 GitHub
 ```
 
-The canonical Docker Compose stack includes the MCP server, OpenAI tunnel client,
-and local OpenBao service. Prepare the persistent OpenBao directory before first
-startup:
+The MCP image is published to GitHub Container Registry after successful pushes
+to `main`:
+
+```text
+ghcr.io/vitormattos/git-signing-mcp:latest
+ghcr.io/vitormattos/git-signing-mcp:sha-<git-sha>
+```
+
+Pull requests lint, build, and smoke-test the image but never publish it.
+Published builds include SBOM and provenance attestations, and Buildx reuses the
+GitHub Actions cache between builds. The GHCR package should be made public after
+its first publication when anonymous production pulls are desired.
+
+The canonical Docker Compose stack consumes the published MCP image and includes
+the OpenAI tunnel client and local OpenBao service. Prepare the persistent
+OpenBao directory before first startup:
 
 ```bash
 install -d -m 700 -o 100 -g 100 volumes/openbao

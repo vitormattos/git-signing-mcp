@@ -153,7 +153,8 @@ The effective local topology must have `tunnel-client` only on `frontend`,
 ```bash
 docker compose up -d openbao
 docker compose exec openbao bao status
-docker compose up -d --build mcp tunnel-client
+docker compose pull mcp tunnel-client
+docker compose up -d mcp tunnel-client
 docker compose ps
 ```
 
@@ -189,8 +190,7 @@ OpenBao data volume.
 ```bash
 git pull --ff-only
 docker compose pull
-docker compose up -d openbao
-docker compose up -d --build mcp tunnel-client
+docker compose up -d
 docker compose ps
 ```
 
