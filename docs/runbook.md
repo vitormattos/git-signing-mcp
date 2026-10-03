@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # End-to-end VPS runbook
 
 This is the canonical installation sequence for the self-contained personal

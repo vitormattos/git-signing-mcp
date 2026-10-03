@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # OpenBao setup
 
 The MCP uses OpenBao KV v2 for:

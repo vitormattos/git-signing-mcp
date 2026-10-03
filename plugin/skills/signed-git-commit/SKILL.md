@@ -3,6 +3,11 @@ name: signed-git-commit
 description: Create or verify Git commits that require DCO Signed-off-by trailers and cryptographic SSH/OpenPGP signatures. Use when the user asks to commit repository changes and the private signed-git MCP tools are available through the configured Secure MCP Tunnel.
 ---
 
+<!--
+SPDX-FileCopyrightText: 2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 # Signed Git commits
 
 Use the private tunnel-backed signed-git MCP server for the commit creation step
