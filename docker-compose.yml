@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Vitor Mattos <1079143+vitormattos@users.noreply.github.com>
+# SPDX-FileCopyrightText: 2026 Vitor Mattos <vitor@php.rio>
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
