@@ -30,7 +30,7 @@ services:
       GITHUB_TOKEN_SOURCE: ${GITHUB_TOKEN_SOURCE:-openbao}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
-      OPENBAO_ADDR: ${OPENBAO_ADDR:-}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:-http://openbao:8200}
       OPENBAO_NAMESPACE: ${OPENBAO_NAMESPACE:-}
       OPENBAO_ROLE_ID_FILE: /run/secrets/openbao_role_id
       OPENBAO_SECRET_ID_FILE: /run/secrets/openbao_secret_id
@@ -49,8 +49,12 @@ services:
       - mcp_tunnel_shared_secret
       - openbao_role_id
       - openbao_secret_id
+    depends_on:
+      openbao:
+        condition: service_healthy
     networks:
       frontend:
+      backend:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     read_only: true
@@ -70,6 +74,39 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  openbao:
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    restart: unless-stopped
+    command:
+      - server
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+    volumes:
+      - ./deploy/openbao/openbao.hcl:/openbao/config/openbao.hcl:ro
+      - ./volumes/openbao:/openbao/file
+    secrets:
+      - openbao_static_seal_key
+    networks:
+      backend:
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_swappiness: 0
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bao status >/dev/null 2>&1"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   tunnel-client:
     image: ghcr.io/openai/tunnel-client:v0.0.15@sha256:119799b778ba8411a124f53588f9dc837fd62ba03e5fadf77d675123c92ab58e
@@ -104,6 +141,9 @@ services:
 networks:
   frontend:
     driver: bridge
+  backend:
+    driver: bridge
+    internal: true
 
 secrets:
   openai_tunnel_runtime_api_key:
@@ -114,3 +154,5 @@ secrets:
     file: ${OPENBAO_ROLE_ID_FILE:-./secrets/openbao_role_id}
   openbao_secret_id:
     file: ${OPENBAO_SECRET_ID_FILE:-./secrets/openbao_secret_id}
+  openbao_static_seal_key:
+    file: ${OPENBAO_STATIC_SEAL_KEY_FILE:-./secrets/openbao_static_seal_key}

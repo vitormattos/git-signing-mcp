@@ -11,20 +11,19 @@ host. No MCP or OpenBao port is published to the Internet.
 
 For a complete fresh-install sequence, also see `docs/runbook.md`.
 
-## 1. Clone and enable the local OpenBao topology
+## 1. Clone and prepare the local topology
 
 ```bash
 git clone git@github.com:vitormattos/git-signing-mcp.git
 cd git-signing-mcp
 cp .env.example .env
 install -d -m 700 secrets
-ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 -o 100 -g 100 volumes/openbao
 ```
 
-The symlink is important: future `git pull` operations update the tracked
-`docker-compose.openbao.yml` automatically. Do not copy that file to the
-override.
+OpenBao is part of the canonical `docker-compose.yml`; no tracked override or
+symlink is required. A local `docker-compose.override.yml` may still be used
+for host-specific experimentation and is intentionally ignored by Git.
 
 `docker-compose.override.yml`, `secrets/`, `secrets-local/`, and
 `volumes/` are ignored by Git.

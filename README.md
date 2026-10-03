@@ -36,16 +36,16 @@ git-signing-mcp ------> OpenBao
 GitHub
 ```
 
-For a self-contained VPS deployment, enable the tracked local OpenBao override
-with a symlink:
+The canonical Docker Compose stack includes the MCP server, OpenAI tunnel client,
+and local OpenBao service. Prepare the persistent OpenBao directory before first
+startup:
 
 ```bash
-ln -sfn docker-compose.openbao.yml docker-compose.override.yml
 install -d -m 700 -o 100 -g 100 volumes/openbao
 ```
 
-The override filename, `secrets/`, `secrets-local/`, and `volumes/` are
-ignored by Git.
+`secrets/`, `secrets-local/`, `volumes/`, and local
+`docker-compose.override.yml` customizations are ignored by Git.
 
 ## What it provides
 
@@ -61,7 +61,7 @@ ignored by Git.
 - structured audit events without secret contents, including write latency;
 - shallow bare-repository caching with temporary Git worktrees;
 - OpenBao AppRole + KV v2 integration;
-- optional local single-node OpenBao deployment with persistent PebbleDB;
+- local single-node OpenBao deployment with persistent PebbleDB;
 - file-backed runtime secrets;
 - CI and Dependabot coverage.
 
