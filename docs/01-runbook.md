@@ -47,7 +47,7 @@ Store the recovery key and initial root token outside the VPS. Confirm
 `Sealed false`; no manual unseal is required.
 
 For an existing Shamir installation, stop here and follow the migration section
-in `docs/openbao.md`. Do not reinitialize an existing data volume.
+in `docs/03-openbao.md`. Do not reinitialize an existing data volume.
 
 Enable KV v2 and AppRole, create the policy/role, and store:
 

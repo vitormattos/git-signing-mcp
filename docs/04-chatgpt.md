@@ -30,7 +30,7 @@ Create a dedicated service-account API key for the tunnel client:
 - save the key in a password manager.
 
 Write it to `secrets/openai_tunnel_runtime_api_key` as described in
-`docs/deployment.md`.
+`docs/02-deployment.md`.
 
 ## 3. Start the VPS stack
 
