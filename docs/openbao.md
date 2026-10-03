@@ -222,17 +222,24 @@ key, and store the private key in the same `private_key` field. Set
 
 ## 8. Create a fine-grained GitHub PAT
 
-Create a dedicated fine-grained PAT for the MCP:
+Create a dedicated fine-grained PAT for the MCP.
+
+For the current personal deployment:
 
 - token name: `git-signing-mcp`;
 - description: `Token dedicado ao git-signing-mcp para consultar repositórios e fazer push de commits assinados.`;
-- choose the correct resource owner for the repositories;
-- prefer `Only select repositories`;
-- expiration: use an explicit rotation period, for example 90 days;
-- repository permissions:
-  - Contents: Read and write;
-  - Metadata: Read-only;
-- leave unrelated permissions at No access.
+- choose the correct resource owner;
+- Repository access: All repositories;
+- Metadata: Read-only;
+- Contents: Read and write;
+- Workflows: Read and write;
+- Actions: Read and write;
+- use an explicit expiration/rotation period.
+
+The broad scope is intentional for this single-user trusted VPS. `Workflows`
+allows updates under `.github/workflows/`; `Actions` is broader than a plain
+commit requires. For a narrower deployment, prefer selected repositories and
+remove permissions that are not needed.
 
 Store the PAT in a password manager.
 
