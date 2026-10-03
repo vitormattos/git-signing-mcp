@@ -81,7 +81,11 @@ Sealed          false
 
 Normal restarts should return to this state automatically.
 
-## 4. Existing Shamir 2-of-3 installation: migration
+## 4. One-time migration for existing Shamir 2-of-3 installations
+
+This section is historical/operational guidance only for installations that have
+not yet migrated. Do not run these migration commands during a normal update or
+restart of an already-migrated static auto-unseal deployment.
 
 This is a seal migration, not a storage migration. Do not run
 `bao operator migrate`; PebbleDB remains unchanged.
@@ -315,8 +319,10 @@ in GitHub. Restarting the MCP clears the tmpfs GPG import and secret cache.
 
 ## Security notes
 
-- OpenBao listens on HTTP only inside the private Docker network and publishes no
-  host port.
+- OpenBao listens on HTTP only inside the internal backend Docker network and
+  publishes no host port.
+- The tunnel client is not attached to the OpenBao backend network; only the MCP
+  participates in both frontend and backend networks.
 - The Docker host/root account is intentionally part of the trusted computing
   base.
 - Static auto-unseal removes routine manual unseal but makes availability of the

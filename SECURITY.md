@@ -69,8 +69,10 @@ Use a dedicated Git signing key for this service rather than reusing a general
 SSH authentication key. Register only the corresponding public key with GitHub
 as a signing key.
 
-OpenBao-backed keys are materialized only inside the container tmpfs for the
-duration of one commit operation and then removed with the temporary worktree.
+OpenBao-backed OpenPGP keys are imported into a reusable GNUPGHOME under the
+MCP container tmpfs. The import is reused while that container exists and is
+discarded when the container is recreated. Per-operation passphrase files and
+temporary worktrees are removed after each commit.
 
 ## Host security
 

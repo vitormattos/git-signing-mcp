@@ -26,6 +26,7 @@ The production Compose file instead mounts secret values as files under
 ./secrets/mcp_tunnel_shared_secret
 ./secrets/openbao_role_id
 ./secrets/openbao_secret_id
+./secrets/openbao_static_seal_key
         |
         v
 /run/secrets/<name>
@@ -35,18 +36,46 @@ The `.env` file contains only non-secret configuration and paths to these secret
 files. The tunnel client uses its supported `file:/...` references and the MCP
 uses `*_FILE` settings.
 
+Secret mounts are intentionally narrow:
+
+```text
+openai_tunnel_runtime_api_key -> tunnel-client
+mcp_tunnel_shared_secret      -> tunnel-client + mcp
+openbao_role_id               -> mcp
+openbao_secret_id             -> mcp
+openbao_static_seal_key       -> openbao
+```
+
 This does not protect against a compromised Docker host or root administrator,
 which remain inside the trusted computing base. It does reduce accidental
 exposure through environment dumps, `docker inspect`, diagnostics, and logging.
 
 ## Immutable container inputs
 
-The Python base image and the OpenAI tunnel-client image are pinned as
-`tag@sha256:digest`. The tag stays readable while the digest determines the
-exact image content executed.
+The Python base image, OpenAI tunnel-client image, and local OpenBao image are
+pinned as `tag@sha256:digest`. The tag stays readable while the digest
+determines the exact image content executed.
 
 Dependabot is configured for Dockerfile and Docker Compose so image updates are
 proposed explicitly instead of changing underneath a running deployment.
+
+## Docker network segmentation
+
+The production Compose topology uses two bridge networks:
+
+```text
+tunnel-client -> frontend -> mcp -> backend (internal) -> openbao
+```
+
+Only the MCP joins both networks. The tunnel client cannot resolve or connect
+directly to OpenBao, and OpenBao has no general external egress through the
+internal backend network. The MCP remains on the frontend network so it can
+reach GitHub and OpenBao.
+
+HTTP is intentionally retained on the MCP-to-OpenBao hop. Within this threat
+model, the isolated Docker backend network and absence of published ports remove
+the relevant remote attack path without adding a local CA, certificates, or
+rotation workflow.
 
 ## Access layers
 
@@ -89,9 +118,15 @@ Patch mode runs `git apply --check` before applying a unified diff and validates
 the resulting changed paths with the same path/symlink policy used for direct
 file changes.
 
-Audit logs omit file contents and credentials. Subprocess failures include the
-command shape and a bounded stderr excerpt, with commit messages and common
-GitHub credential formats redacted.
+Application audit logs omit file contents and credentials. Subprocess failures
+include the command shape and a bounded stderr excerpt, with commit messages and
+common GitHub credential formats redacted.
+
+OpenBao audit devices are not enabled in the default single-user deployment.
+They would improve server-side request traceability, but also add a persistent
+log lifecycle, disk-pressure risk, and failure handling that are disproportionate
+to this deployment. Revisit that choice if the service becomes multi-user or if
+independent compliance-grade audit retention becomes a requirement.
 
 ## In-memory and tmpfs caches
 
