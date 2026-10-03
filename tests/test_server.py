@@ -2,19 +2,18 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import os
-
-os.environ.setdefault("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
-os.environ.setdefault("GIT_IDENTITY_NAME", "Vitor Mattos")
-os.environ.setdefault(
-    "GIT_IDENTITY_EMAIL",
-    "1079143+vitormattos@users.noreply.github.com",
-)
-
-from git_signing_mcp import server
+import importlib
 
 
 def test_verification_after_push_skips_lookup_when_disabled(monkeypatch):
+    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
+    monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
+    monkeypatch.setenv(
+        "GIT_IDENTITY_EMAIL",
+        "1079143+vitormattos@users.noreply.github.com",
+    )
+    server = importlib.import_module("git_signing_mcp.server")
+
     def unexpected_lookup(repository, commit_sha):
         raise AssertionError("verification lookup must be skipped")
 
