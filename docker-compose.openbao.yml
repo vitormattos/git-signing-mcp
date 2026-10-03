@@ -17,6 +17,8 @@ services:
     volumes:
       - ./deploy/openbao/openbao.hcl:/openbao/config/openbao.hcl:ro
       - ./volumes/openbao:/openbao/file
+    secrets:
+      - openbao_static_seal_key
     networks:
       - private
     read_only: true
@@ -44,3 +46,7 @@ services:
         condition: service_healthy
     environment:
       OPENBAO_ADDR: http://openbao:8200
+
+secrets:
+  openbao_static_seal_key:
+    file: ${OPENBAO_STATIC_SEAL_KEY_FILE:-./secrets/openbao_static_seal_key}

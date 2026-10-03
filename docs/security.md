@@ -117,3 +117,26 @@ ChatGPT app/workspace permitted to use that tunnel.
 Keep the app private, grant tunnel Read/Use only to intended operators, and do
 not expose the MCP container through Nginx, Docker host ports, Cloudflare, or a
 public load balancer.
+
+
+## OpenBao static auto-unseal
+
+The local single-user deployment uses OpenBao's built-in Static Key Auto Unseal.
+The 32-byte seal key is mounted only into the OpenBao container as a file-backed
+Compose secret and is not stored in `.env`, the image, Git, or the OpenBao data
+volume.
+
+This is a deliberate threat-model choice, not equivalent to an external KMS. The
+VPS/root account is already part of the trusted computing base. Therefore keeping
+the static seal key on the same trusted host does not attempt to protect against a
+malicious root user or full host compromise.
+
+It still preserves a useful boundary for narrower failures: a copy of
+`volumes/openbao` alone does not include the static seal key and remains
+encrypted. That property disappears if a backup, snapshot, archive, or exfiltration
+contains both `volumes/openbao` and `secrets/openbao_static_seal_key`.
+
+Back up the encrypted OpenBao data and the static seal key through separate
+recovery paths. Losing the static seal key permanently makes an auto-unseal
+OpenBao cluster unrecoverable from the storage backup alone; recovery keys
+authorize sensitive operations but cannot decrypt the root key.

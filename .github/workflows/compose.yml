@@ -29,6 +29,7 @@ jobs:
           printf '%s\n' '0123456789abcdef0123456789abcdef' > secrets/mcp_tunnel_shared_secret
           printf '%s\n' 'dummy-role-id' > secrets/openbao_role_id
           printf '%s\n' 'dummy-secret-id' > secrets/openbao_secret_id
+          head -c 32 /dev/zero > secrets/openbao_static_seal_key
 
           docker compose config --quiet
           docker compose \
