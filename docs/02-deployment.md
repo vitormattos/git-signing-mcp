@@ -146,6 +146,31 @@ process/container. The default 300-second secret cache can be disabled with
 `SECRET_CACHE_TTL_SECONDS=0`. The repository and GPG directories are under the
 MCP's `/tmp` tmpfs by default and disappear when the container is recreated.
 
+The MCP `/tmp` limit defaults to `1g` and can be changed with `MCP_TMPFS_SIZE`
+in `.env`. Size it for the retained repository caches plus the temporary
+checkouts of up to `MAX_CONCURRENT_WRITES` concurrent writes. A 256 MB limit can
+fill with cached Git objects before a larger repository can be checked out.
+The tmpfs consumes host memory as it fills; the size is a ceiling, not an
+up-front memory allocation. Repository caches remain until the container is
+recreated, so monitor usage as more repositories are added.
+
+If a worktree fails with `unable to write file`, check space and inodes:
+
+```bash
+docker compose exec mcp sh -c 'df -h /tmp; df -i /tmp'
+```
+
+After changing `MCP_TMPFS_SIZE`, apply the mount configuration by recreating
+the MCP container; `docker compose restart` does not apply Compose changes:
+
+```bash
+docker compose up -d --force-recreate mcp
+docker compose exec mcp df -h /tmp
+```
+
+Recreation clears the temporary repository and GPG caches. Signing keys and
+GitHub credentials stored in OpenBao are unaffected.
+
 ## 6. Network topology
 
 The production topology is segmented:
