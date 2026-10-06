@@ -54,7 +54,7 @@ services:
       frontend:
       backend:
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
+      - /tmp:rw,noexec,nosuid,size=${MCP_TMPFS_SIZE:-1g}
     read_only: true
     cap_drop:
       - ALL
