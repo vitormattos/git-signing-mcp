@@ -408,3 +408,62 @@ def test_exact_push_leases_prevent_independent_writers(tmp_path: Path):
         ["git", "-C", str(clones[0]), "rev-parse", "HEAD"], text=True
     ).strip()
     assert remote_head == winner
+
+
+def test_empty_remote_lease_prevents_competing_branch_creators(tmp_path: Path):
+    """Two independent processes creating the same absent ref cannot both succeed."""
+    import subprocess
+
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", str(seed)], check=True, capture_output=True)
+    for key, value in (("user.name", "CI"), ("user.email", "ci@example.invalid")):
+        subprocess.run(["git", "-C", str(seed), "config", key, value], check=True)
+    (seed / "README.md").write_text("baseline\n")
+    subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(seed), "commit", "-m", "baseline"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(seed), "branch", "-M", "main"], check=True)
+    subprocess.run(
+        ["git", "-C", str(seed), "remote", "add", "origin", str(remote)], check=True
+    )
+    subprocess.run(["git", "-C", str(seed), "push", "origin", "main"],
+                   check=True, capture_output=True)
+
+    attempts = []
+    for index in range(2):
+        work = tmp_path / f"writer-{index}"
+        subprocess.run(
+            ["git", "clone", "--branch", "main", str(remote), str(work)],
+            check=True, capture_output=True,
+        )
+        for key, value in (("user.name", "CI"), ("user.email", "ci@example.invalid")):
+            subprocess.run(["git", "-C", str(work), "config", key, value], check=True)
+        (work / "writer.txt").write_text(f"{index}\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(work), "commit", "-m", f"writer {index}"],
+            check=True, capture_output=True,
+        )
+        attempts.append(work)
+
+    results = [
+        subprocess.run([
+            "git", "-C", str(work), "push",
+            "--force-with-lease=refs/heads/feature/new:",
+            "origin", "HEAD:refs/heads/feature/new",
+        ], capture_output=True)
+        for work in attempts
+    ]
+    assert [r.returncode == 0 for r in results] == [True, False]
+    expected = subprocess.check_output(
+        ["git", "-C", str(attempts[0]), "rev-parse", "HEAD"], text=True
+    ).strip()
+    observed = subprocess.check_output(
+        ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/feature/new"],
+        text=True,
+    ).strip()
+    assert observed == expected
