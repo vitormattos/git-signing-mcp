@@ -467,3 +467,21 @@ def test_empty_remote_lease_prevents_competing_branch_creators(tmp_path: Path):
         text=True,
     ).strip()
     assert observed == expected
+
+
+@pytest.mark.parametrize(
+    ("lease", "expected_code"),
+    [
+        ("--force-with-lease=refs/heads/feature/new:", "target_branch_exists"),
+        ("--force-with-lease=refs/heads/feature/new:" + "a" * 40, "target_head_mismatch"),
+    ],
+)
+def test_push_stale_lease_classifies_rejected_remote_reference(
+    lease: str, expected_code: str,
+):
+    failure = gitops._classify_git_failure(
+        ["git", "push", lease, "origin", "HEAD:refs/heads/feature/new"],
+        "! [rejected] HEAD -> feature/new (stale info)\n",
+    )
+    assert failure.code == expected_code
+    assert failure.operation == "push"
