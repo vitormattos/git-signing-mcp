@@ -55,6 +55,7 @@ class PushOutcomeError(GitOperationError):
         self.definitively_rejected = cause.code in {
             "github_write_forbidden", "github_authentication_failed",
             "github_branch_policy_rejected", "branch_head_changed",
+            "target_branch_exists", "target_head_mismatch",
         }
 
 
@@ -119,6 +120,18 @@ def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
                 "Use an allowed feature branch or satisfy the repository rules before retrying. "
                 "Do not bypass branch protection from the MCP."
             ),
+        )
+
+    if "stale info" in detail and operation == "push":
+        is_create = any(
+            arg.startswith("--force-with-lease=refs/heads/") and arg.endswith(":")
+            for arg in args
+        )
+        return GitOperationError(
+            code="target_branch_exists" if is_create else "target_head_mismatch",
+            operation=operation,
+            message="Remote branch precondition was rejected at push.",
+            remediation="Refresh the destination branch and reconcile before another write.",
         )
 
     if "non-fast-forward" in detail or ("[rejected]" in detail and "fetch first" in detail):
