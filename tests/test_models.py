@@ -60,6 +60,8 @@ def test_commit_request_requires_exactly_one_change_source(kwargs):
         CommitRequest(
             repository="owner/repo",
             branch="feature/example",
+            mode="create",
+            expected_base_sha="a" * 40,
             message="feat: example",
             **kwargs,
         )

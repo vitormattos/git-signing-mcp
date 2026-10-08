@@ -301,7 +301,7 @@ class RepositoryCache:
         lock = self._lock_for(repository)
         with lock:
             if not cache.exists():
-                cache.mkdir(mode=0o700)
+                cache.mkdir(mode=0o700, parents=True)
                 _run(["git", "init", "--quiet", "--bare"], cache, env)
                 _run(
                     ["git", "remote", "add", "origin", f"https://github.com/{repository}.git"],
