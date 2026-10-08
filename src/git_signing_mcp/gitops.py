@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .config import Settings
 from .models import FileChange
-from .security import validate_change_path
+from .security import audit, validate_change_path
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,22 @@ class GitOperationError(RuntimeError):
         self.code = code
         self.operation = operation
         self.remediation = remediation
+
+
+class PushOutcomeError(GitOperationError):
+    """Carry the signed local SHA across a failed push boundary."""
+
+    def __init__(self, cause: GitOperationError, commit_sha: str) -> None:
+        super().__init__(
+            code=cause.code, operation="push", message=str(cause),
+            remediation=cause.remediation,
+        )
+        self.commit_sha = commit_sha
+        self.definitively_rejected = cause.code in {
+            "github_write_forbidden", "github_authentication_failed",
+            "github_branch_policy_rejected", "branch_head_changed",
+            "target_branch_exists", "target_head_mismatch",
+        }
 
 
 class BranchPreconditionError(GitOperationError):
@@ -559,6 +575,7 @@ def create_signed_commit(
     changes: list[FileChange],
     mode: str | None = None,
     expected_base_sha: str | None = None,
+    request_id: str | None = None,
     patch: str | None,
     message: str,
     repository_cache: RepositoryCache,
@@ -624,6 +641,11 @@ def create_signed_commit(
             raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
             if "\ngpgsig " not in f"\n{raw_commit}":
                 raise RuntimeError("Git produced an unsigned commit")
+            if request_id is not None:
+                audit(
+                    "commit.local_created", request_id=request_id,
+                    repository=repository, branch=branch, commit_sha=commit_sha,
+                )
 
             if mode in {"create", "update"}:
                 # Exact remote lease is enforced by receive-pack, not by a local lock.
@@ -644,5 +666,13 @@ def create_signed_commit(
                 ]
             else:
                 push_args = ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"]
-            _run(push_args, repo, git_auth_env)
+            try:
+                _run(push_args, repo, git_auth_env)
+            except GitOperationError as exc:
+                raise PushOutcomeError(exc, commit_sha) from None
+            if request_id is not None:
+                audit(
+                    "commit.push_confirmed", request_id=request_id,
+                    repository=repository, branch=branch, commit_sha=commit_sha,
+                )
             return commit_sha
