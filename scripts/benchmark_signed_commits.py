@@ -72,6 +72,8 @@ def command_stage(args: list[str]) -> str:
         return "git_fetch"
     if "push" in args:
         return "git_push"
+    if "cat-file" in args:
+        return "git_local"
     if "commit" in args:
         return "git_sign"
     if "worktree" in args:
