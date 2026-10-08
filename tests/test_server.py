@@ -72,3 +72,62 @@ def test_create_signed_commit_returns_actionable_git_failure(monkeypatch):
     assert payload["request_id"]
     assert "private-key" not in str(payload)
     assert "github-token" not in str(payload)
+
+
+def test_successful_push_verification_outage_still_returns_sha(monkeypatch):
+    import importlib
+
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "token")
+    monkeypatch.setattr(server, "create_signed_commit", lambda **kwargs: "a" * 40)
+    monkeypatch.setattr(
+        server, "_verification_after_push",
+        lambda *args: (_ for _ in ()).throw(ConnectionError("secret")),
+    )
+    request = models.CommitRequest(
+        repository="owner/repo", branch="feature/test", mode="update",
+        expected_head_sha="b" * 40, message="test",
+        changes=[models.FileChange(path="README.md", content="content")],
+    )
+    result = server.create_signed_git_commit(request)
+    assert result.is_error is False
+    assert result.structured_content["write_outcome"] == "pushed"
+    assert result.structured_content["commit_sha"] == "a" * 40
+    assert result.structured_content["verification_status"] == "unavailable"
+    assert "secret" not in str(result.structured_content)
+
+
+def test_ambiguous_push_is_reconciled_only_on_error(monkeypatch):
+    import importlib
+
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    gitops = importlib.import_module("git_signing_mcp.gitops")
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "token")
+    def interrupted_push(**kwargs):
+        raise gitops.PushOutcomeError(
+            gitops.GitOperationError(
+                code="git_operation_failed", operation="push",
+                message="failed", remediation="inspect remote",
+            ), "c" * 40,
+        )
+    monkeypatch.setattr(server, "create_signed_commit", interrupted_push)
+    monkeypatch.setattr(server.github, "branch_sha", lambda *args: "c" * 40)
+    request = models.CommitRequest(
+        repository="owner/repo", branch="feature/test", mode="update",
+        expected_head_sha="b" * 40, message="test",
+        changes=[models.FileChange(path="README.md", content="content")],
+    )
+    result = server.create_signed_git_commit(request)
+    assert result.is_error is False
+    assert result.structured_content["write_outcome"] == "pushed"
+    assert result.structured_content["commit_sha"] == "c" * 40

@@ -43,6 +43,21 @@ class GitOperationError(RuntimeError):
         self.remediation = remediation
 
 
+class PushOutcomeError(GitOperationError):
+    """Carry the signed local SHA across a failed push boundary."""
+
+    def __init__(self, cause: GitOperationError, commit_sha: str) -> None:
+        super().__init__(
+            code=cause.code, operation="push", message=str(cause),
+            remediation=cause.remediation,
+        )
+        self.commit_sha = commit_sha
+        self.definitively_rejected = cause.code in {
+            "github_write_forbidden", "github_authentication_failed",
+            "github_branch_policy_rejected", "branch_head_changed",
+        }
+
+
 class BranchPreconditionError(GitOperationError):
     def __init__(self, code: str, observed_sha: str | None) -> None:
         super().__init__(
@@ -632,5 +647,8 @@ def create_signed_commit(
                 ]
             else:
                 push_args = ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"]
-            _run(push_args, repo, git_auth_env)
+            try:
+                _run(push_args, repo, git_auth_env)
+            except GitOperationError as exc:
+                raise PushOutcomeError(exc, commit_sha) from None
             return commit_sha

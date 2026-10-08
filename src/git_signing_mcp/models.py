@@ -84,6 +84,10 @@ class CommitResult(BaseModel):
     cryptographic_verification: bool
     verification_reason: str | None = None
     write_outcome: Literal["pushed"] = "pushed"
+    verification_status: Literal[
+        "verified", "unverified", "unavailable", "not_requested"
+    ] = "unverified"
+    next_action: Literal["verify_commit", "none"] = "none"
 
 
 class CommitFailure(BaseModel):
