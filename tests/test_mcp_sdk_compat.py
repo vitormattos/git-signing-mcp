@@ -109,6 +109,10 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
                     "request": {
                         "repository": "owner/repo", "branch": "feature/test",
                         "message": "test",
+                        **(
+                            {"mode": "update", "expected_head_sha": "a" * 40}
+                            if "mode" in server.CommitRequest.model_fields else {}
+                        ),
                         "changes": [{"path": "README.md", "content": "content"}],
                     }
                 },
