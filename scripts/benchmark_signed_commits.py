@@ -23,7 +23,6 @@ import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from statistics import median
 from types import SimpleNamespace
 
 from git_signing_mcp import gitops

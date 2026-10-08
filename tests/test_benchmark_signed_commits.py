@@ -49,3 +49,23 @@ def test_payloads_distinguish_file_and_patch_shapes():
 def test_reference_revision_is_immutable():
     from scripts.benchmark_signed_commits import BASELINE_REVISION
     assert BASELINE_REVISION == "555f0066c435a1f2648c0b7e93277358c30ae9bf"
+
+
+def test_disposable_signed_git_roundtrip(tmp_path):
+    """Exercise a real signed commit without contacting a remote service."""
+    import shutil
+    from argparse import Namespace
+    from scripts.benchmark_signed_commits import measure
+
+    if not shutil.which("gpg") or not shutil.which("git"):
+        import pytest
+        pytest.skip("requires Git and GnuPG executables")
+    report = measure(Namespace(
+        agents=[1], rounds=1, max_concurrent_writes=1,
+        max_writes_per_minute=10, repositories="same", branches="separate",
+        size="small", mode="files", passphrase=False, verify=True,
+        root=tmp_path, output=None,
+    ))
+    assert report["scenarios"][0]["all"]["outcomes"] == {"ok": 1}
+    assert report["scenarios"][0]["all"]["operation_counts"]["git_sign_calls"] == 1
+    assert report["measurement_type"] == "offline_local_gitops_not_live_mcp"
