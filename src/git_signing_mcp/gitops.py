@@ -575,6 +575,7 @@ def create_signed_commit(
     changes: list[FileChange],
     mode: str | None = None,
     expected_base_sha: str | None = None,
+    request_id: str | None = None,
     patch: str | None,
     message: str,
     repository_cache: RepositoryCache,
