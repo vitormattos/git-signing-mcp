@@ -485,3 +485,57 @@ def test_push_stale_lease_classifies_rejected_remote_reference(
     )
     assert failure.code == expected_code
     assert failure.operation == "push"
+
+
+def test_deleted_and_recreated_ref_rejects_stale_writer(tmp_path: Path):
+    """Deletion and recreation do not permit a stale snapshot to overwrite a ref."""
+    import subprocess
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    first = tmp_path / "first"
+    subprocess.run(["git", "init", str(first)], check=True, capture_output=True)
+    for key, value in (("user.name", "CI"), ("user.email", "ci@example.invalid")):
+        subprocess.run(["git", "-C", str(first), "config", key, value], check=True)
+    (first / "file.txt").write_text("base\n")
+    subprocess.run(["git", "-C", str(first), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(first), "commit", "-m", "base"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(first), "remote", "add", "origin", str(remote)],
+                   check=True)
+    target = "refs/heads/feature/demo"
+    subprocess.run(["git", "-C", str(first), "push", "origin", f"HEAD:{target}"],
+                   check=True, capture_output=True)
+    old = subprocess.check_output(
+        ["git", "-C", str(first), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    agent = tmp_path / "stale-agent"
+    subprocess.run(["git", "clone", "--branch", "feature/demo",
+                    str(remote), str(agent)], check=True, capture_output=True)
+    for key, value in (("user.name", "CI"), ("user.email", "ci@example.invalid")):
+        subprocess.run(["git", "-C", str(agent), "config", key, value], check=True)
+    (agent / "file.txt").write_text("stale edit\n")
+    subprocess.run(["git", "-C", str(agent), "commit", "-am", "stale"],
+                   check=True, capture_output=True)
+
+    subprocess.run(["git", "-C", str(first), "push", "origin", f":{target}"],
+                   check=True, capture_output=True)
+    (first / "file.txt").write_text("new writer\n")
+    subprocess.run(["git", "-C", str(first), "commit", "-am", "recreation"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(first), "push", "origin", f"HEAD:{target}"],
+                   check=True, capture_output=True)
+    recreated = subprocess.check_output(
+        ["git", "--git-dir", str(remote), "rev-parse", target], text=True
+    ).strip()
+    assert recreated != old
+
+    stale = subprocess.run([
+        "git", "-C", str(agent), "push",
+        f"--force-with-lease={target}:{old}", "origin", f"HEAD:{target}",
+    ], capture_output=True)
+    assert stale.returncode != 0
+    assert subprocess.check_output(
+        ["git", "--git-dir", str(remote), "rev-parse", target], text=True
+    ).strip() == recreated
