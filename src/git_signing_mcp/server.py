@@ -246,6 +246,7 @@ def create_signed_git_commit(
                 expected_head_sha=request.expected_head_sha,
                 mode=request.mode,
                 expected_base_sha=request.expected_base_sha,
+                request_id=request_id,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,

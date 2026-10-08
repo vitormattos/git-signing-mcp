@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .config import Settings
 from .models import FileChange
-from .security import validate_change_path
+from .security import audit, validate_change_path
 
 
 logger = logging.getLogger(__name__)
@@ -640,6 +640,11 @@ def create_signed_commit(
             raw_commit = _run(["git", "cat-file", "commit", commit_sha], repo, env)
             if "\ngpgsig " not in f"\n{raw_commit}":
                 raise RuntimeError("Git produced an unsigned commit")
+            if request_id is not None:
+                audit(
+                    "commit.local_created", request_id=request_id,
+                    repository=repository, branch=branch, commit_sha=commit_sha,
+                )
 
             if mode in {"create", "update"}:
                 # Exact remote lease is enforced by receive-pack, not by a local lock.
@@ -664,4 +669,9 @@ def create_signed_commit(
                 _run(push_args, repo, git_auth_env)
             except GitOperationError as exc:
                 raise PushOutcomeError(exc, commit_sha) from None
+            if request_id is not None:
+                audit(
+                    "commit.push_confirmed", request_id=request_id,
+                    repository=repository, branch=branch, commit_sha=commit_sha,
+                )
             return commit_sha
