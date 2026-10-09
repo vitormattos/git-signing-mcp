@@ -49,6 +49,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/signed-git-bench"
           for revision in original integrated; do
             export PYTHONPATH="$GITHUB_WORKSPACE/$revision/src"
+            export MEASURED_CHECKOUT_PATH="$GITHUB_WORKSPACE/$revision"
             for profile in serial separated contended patch; do
               case "$profile" in
                 serial) writes=1; repos=same; payload=small; mode=files ;;

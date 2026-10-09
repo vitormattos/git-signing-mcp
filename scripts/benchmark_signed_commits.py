@@ -198,6 +198,14 @@ def seed_remote(remote: Path, fingerprint: str, gpg_home: Path, root: Path) -> N
     shutil.rmtree(seed)
 
 
+def branch_for(agent: int, round_number: int, agents: int, shared: bool) -> str:
+    # Every workload size must use disjoint refs; otherwise repeated matrices
+    # measure branch-already-exists failures rather than distinct signed writes.
+    if shared:
+        return f"bench/shared-agents-{agents}-round-{round_number}"
+    return f"bench/agent-{agent}-agents-{agents}-round-{round_number}"
+
+
 def payload(agent: int, round_number: int, size: str, mode: str):
     lines = 4 if size == "small" else 512
     content = "".join(f"benchmark fixture line {i:04d} for agent {agent}\n" for i in range(lines))
@@ -220,8 +228,7 @@ def run_batch(
         rec = Recorder()
         token = _current.set(rec)
         repository = f"bench/repo-{index}" if repo_mode == "separate" else "bench/repo-0"
-        branch = (f"bench/shared-{round_number}" if branch_mode == "shared"
-                  else f"bench/agent-{index}-round-{round_number}")
+        branch = branch_for(index, round_number, agents, branch_mode == "shared")
         changes, patch = payload(index, round_number, size, change_mode)
         start = time.perf_counter()
         outcome = "ok"
@@ -362,7 +369,8 @@ def measure(args: argparse.Namespace) -> dict:
             tempfile.tempdir = previous_tempdir
         stats_after = folder_usage(root)
         vfs = os.statvfs(root)
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(os.environ.get("MEASURED_CHECKOUT_PATH",
+                                       str(Path(__file__).resolve().parent.parent)))
         revision_result = _real_run(
             ["git", "rev-parse", "--verify", "HEAD"], cwd=repo_root,
             capture_output=True, text=True, check=False,
@@ -373,6 +381,7 @@ def measure(args: argparse.Namespace) -> dict:
             "measured_checkout_revision": (
                 revision_result.stdout.strip() if revision_result.returncode == 0 else None
             ),
+            "measured_gitops_source": str(Path(gitops.__file__).resolve()),
             "environment": {
                 "python": os.sys.version.split()[0],
                 "git": checked(["git", "--version"]),
