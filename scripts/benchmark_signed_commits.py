@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import inspect
 import json
 import math
 import os
@@ -207,7 +208,7 @@ def run_batch(
     *, agents: int, round_number: int, guard: WriteGuard, settings,
     cache, key_cache, key: str, passphrase: str | None, fingerprint: str,
     gpg_home: Path, branch_mode: str, repo_mode: str,
-    size: str, change_mode: str, verify: bool,
+    size: str, change_mode: str, verify: bool, base_shas: dict[str, str],
 ) -> list[dict]:
     barrier = threading.Barrier(agents)
     def worker(index: int) -> dict:
@@ -225,6 +226,9 @@ def run_batch(
             queued = time.perf_counter()
             with guard.hold():
                 rec.timings_ms["queue_wait"] += (time.perf_counter() - queued) * 1000
+                intent = ({"mode": "create", "expected_base_sha": base_shas[repository]}
+                          if "mode" in inspect.signature(gitops.create_signed_commit).parameters
+                          else {})
                 sha = gitops.create_signed_commit(
                     settings=settings, github_token="fixture-only-not-a-token",
                     signing_key=key, signing_passphrase=passphrase,
@@ -232,6 +236,7 @@ def run_batch(
                     expected_head_sha=None, changes=changes, patch=patch,
                     message="test: benchmark disposable write",
                     repository_cache=cache, openpgp_cache=key_cache,
+                    **intent,
                 )
             if verify:
                 started = time.perf_counter()
@@ -290,6 +295,7 @@ def measure(args: argparse.Namespace) -> dict:
             max_concurrent_writes=args.max_concurrent_writes,
             max_writes_per_minute=args.max_writes_per_minute,
         )
+        base_shas = {name: checked(["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"]) for name, remote in _remotes.items()}
         stats_before = folder_usage(root)
         scenarios = []
         original_run = gitops.subprocess.run
@@ -310,6 +316,7 @@ def measure(args: argparse.Namespace) -> dict:
                         ), fingerprint=fingerprint, gpg_home=key_home,
                         branch_mode=args.branches, repo_mode=args.repositories,
                         size=args.size, change_mode=args.mode, verify=args.verify,
+                        base_shas=base_shas,
                     )
                     rows.extend(batch)
                 scenarios.append({
@@ -349,6 +356,7 @@ def measure(args: argparse.Namespace) -> dict:
                 "verification": "local_GPG_and_DCO" if args.verify else "disabled",
                 "passphrase_key": args.passphrase,
                 "rounds": args.rounds,
+                "active_compare_and_swap_mode": "mode" in inspect.signature(gitops.create_signed_commit).parameters,
             },
             "footprint": {
                 "before": stats_before, "after": stats_after,
