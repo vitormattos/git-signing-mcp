@@ -21,3 +21,106 @@ def test_mcpserver_custom_route_is_exposed_by_streamable_http_app():
     )
 
     assert any(getattr(route, "path", None) == "/healthz" for route in app.routes)
+
+
+def test_native_mcp_output_schema_and_result_contract(monkeypatch):
+    import importlib
+    from mcp.types import CallToolResult
+
+    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
+    monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
+    monkeypatch.setenv("GIT_IDENTITY_EMAIL", "1079143+vitormattos@users.noreply.github.com")
+    server = importlib.import_module("git_signing_mcp.server")
+
+    import anyio
+
+    async def exercise():
+        advertised = await server.mcp.list_tools()
+        tools = {tool.name: tool for tool in advertised}
+        assert tools["create_signed_git_commit"].output_schema is not None
+        assert tools["create_signed_git_commit"].annotations.destructive_hint is True
+        for name in ("get_identity", "verify_commit"):
+            assert tools[name].annotations.destructive_hint is False
+        assert server.mcp.instructions is not None
+        result = await server.mcp.call_tool("get_identity", {})
+        assert isinstance(result, CallToolResult)
+        assert result.structured_content is not None
+
+    anyio.run(exercise)
+
+
+def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
+    import importlib
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
+    monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
+    monkeypatch.setenv("GIT_IDENTITY_EMAIL", "1079143+vitormattos@users.noreply.github.com")
+    server = importlib.import_module("git_signing_mcp.server")
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    from git_signing_mcp import gitops
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("sensitive-private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "github_pat_sensitive_token")
+
+    def rejected_write(**kwargs):
+        raise gitops.GitOperationError(
+            code="github_write_forbidden", operation="push",
+            message="GitHub refused the configured credential.",
+            remediation="Inspect repository permission.",
+        )
+
+    monkeypatch.setattr(server, "create_signed_commit", rejected_write)
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+
+    def call(client, method, params=None, request_id=1):
+        response = client.post(
+            "/mcp", headers=headers,
+            json={
+                "jsonrpc": "2.0", "id": request_id,
+                "method": method, "params": params or {},
+            },
+        )
+        assert response.status_code == 200, response.text[:1000]
+        return response.json()["result"]
+
+    with TestClient(server.mcp_app, base_url="http://mcp") as client:
+        initialization = call(
+            client, "initialize",
+            {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "protocol-test", "version": "1"},
+            },
+        )
+        assert initialization["instructions"]
+        tools = call(client, "tools/list", request_id=2)["tools"]
+        signed_write = next(t for t in tools if t["name"] == "create_signed_git_commit")
+        assert signed_write["outputSchema"]
+        assert signed_write["annotations"]["destructiveHint"] is True
+        error = call(
+            client, "tools/call", {
+                "name": "create_signed_git_commit",
+                "arguments": {
+                    "request": {
+                        "repository": "owner/repo", "branch": "feature/test",
+                        "message": "test",
+                        **(
+                            {"mode": "update", "expected_head_sha": "a" * 40}
+                            if "mode" in server.CommitRequest.model_fields else {}
+                        ),
+                        "changes": [{"path": "README.md", "content": "content"}],
+                    }
+                },
+            }, request_id=3,
+        )
+        assert error["isError"] is True
+        assert error["structuredContent"]["success"] is False
+        assert error["structuredContent"]["write_outcome"] == "unknown"
+        assert "sensitive-private-key" not in str(error)
+        assert "github_pat_sensitive_token" not in str(error)
+        assert error["content"][0]["type"] == "text"

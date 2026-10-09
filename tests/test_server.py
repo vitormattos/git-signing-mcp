@@ -60,9 +60,13 @@ def test_create_signed_commit_returns_actionable_git_failure(monkeypatch):
 
     result = server.create_signed_git_commit(request)
 
-    assert result.success is False
-    assert result.error_code == "github_write_forbidden"
-    assert result.operation == "push"
-    assert result.request_id
-    assert "write" in result.message.lower()
-    assert "retry" in result.remediation.lower()
+    assert result.is_error is True
+    payload = result.structured_content
+    assert payload["success"] is False
+    assert payload["error_code"] == "github_write_forbidden"
+    assert payload["phase"] == "push"
+    assert payload["write_outcome"] == "unknown"
+    assert payload["next_action"] == "inspect_remote"
+    assert payload["request_id"]
+    assert "private-key" not in str(payload)
+    assert "github-token" not in str(payload)

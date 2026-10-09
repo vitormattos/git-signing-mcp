@@ -79,6 +79,14 @@ def validate_change_path(repo: Path, path: str) -> PurePosixPath:
     return candidate
 
 
+class WriteAdmissionError(RuntimeError):
+    """Expected admission failure; no repository write was attempted."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class WriteGuard:
     def __init__(self, settings: Settings) -> None:
         self._limit = settings.max_writes_per_minute
@@ -94,12 +102,12 @@ class WriteGuard:
             while self._window and self._window[0] <= cutoff:
                 self._window.popleft()
             if len(self._window) >= self._limit:
-                raise RuntimeError("write rate limit exceeded")
+                raise WriteAdmissionError("rate_limited")
             self._window.append(now)
 
         acquired = self._semaphore.acquire(timeout=5)
         if not acquired:
-            raise RuntimeError("write concurrency limit exceeded")
+            raise WriteAdmissionError("concurrency_busy")
         try:
             yield
         finally:

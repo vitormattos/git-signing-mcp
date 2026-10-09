@@ -74,6 +74,7 @@ class CommitResult(BaseModel):
     dco_signed_off_by: str
     cryptographic_verification: bool
     verification_reason: str | None = None
+    write_outcome: Literal["pushed"] = "pushed"
 
 
 class CommitFailure(BaseModel):
@@ -85,6 +86,21 @@ class CommitFailure(BaseModel):
     operation: str
     message: str
     remediation: str
+    phase: Literal[
+        "validation", "admission", "secrets", "fetch", "worktree",
+        "apply", "signing", "push", "verification", "unknown",
+    ] = "unknown"
+    write_outcome: Literal["not_applied", "unknown"] = "not_applied"
+    retry_disposition: Literal[
+        "fix_request", "refresh_and_replan", "operator_action",
+        "retry_later", "inspect_before_retry",
+    ] = "operator_action"
+    next_action: Literal[
+        "correct_request", "create_branch_explicitly", "reconcile_branch",
+        "contact_operator", "retry_later", "inspect_remote",
+    ] = "contact_operator"
+    expected_head_sha: str | None = None
+    observed_head_sha: str | None = None
 
 
 class VerificationResult(BaseModel):
