@@ -166,3 +166,24 @@ larger distributions on stable hardware before any performance tuning.
 
 CI also covers the isolated semaphore/quota accounting fix with three
 new deterministic tests. It does not show a tunnel latency improvement.
+
+## Testable CI architecture
+
+The workflows now delegate their substantive logic to standalone Python
+commands:
+
+| Workflow | Command | Independent regression tests |
+|---|---|---|
+| `benchmark.yml` | `scripts/run_benchmark_matrix.py` | `tests/test_workflow_helpers.py` checks workload matrix, subprocess environment, revision attestation, summary contract and errors |
+| `compose.yml` | `scripts/check_compose.py` | network isolation, no published ports, .dockerignore, exclusive dummy-secret creation and cleanup |
+| `docker.yml` | `scripts/smoke_image.py` | import command, image UID 10001, rejection of an incorrect UID |
+
+The `pytest.yml`, `ruff.yml` and `reuse.yml` files already contain
+single-purpose tool invocations, so no wrapper was introduced for them.
+
+To run only the helper tests: `pytest -q tests/test_workflow_helpers.py`.
+The workflow runner accepts explicit `--harness`, `--original`,
+`--integrated`, `--output-dir`, and `--tmpfs-root` paths. It verifies
+the original checkout SHA and validates each reported measured SHA and
+whether the integrated CAS code path was used; an invalid observation
+fails the workflow rather than appearing as performance evidence.
