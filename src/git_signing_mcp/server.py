@@ -290,7 +290,7 @@ def create_signed_git_commit(
                 cryptographic_verification=verified,
                 verification_reason=reason,
                 verification_status=verification_status,
-                next_action="verify_commit" if verification_status == "unavailable"
+                next_action="verify_commit" if verification_status != "verified"
                 else "none",
             )
         )

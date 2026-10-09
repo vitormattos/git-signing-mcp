@@ -150,6 +150,10 @@ Current error codes include:
 - `git_operation_failed`: an unclassified Git failure; use the returned
   `request_id` to correlate with the server audit log.
 
-After deploying this version, `get_identity` reports
-`tool_schema_version: "3"`. Rescan the ChatGPT app tools so the updated result
-schema is visible to callers.
+After the v4 upgrade, `get_identity` reports
+`tool_schema_version: "4"`. Rescan the ChatGPT app tools and start a new
+conversation if the old schema persists. Signed writes require explicit
+`mode=create` with `expected_base_sha`, or `mode=update` with
+`expected_head_sha`. For confirmed pushes, `next_action=verify_commit`
+whenever verification is `unverified`, `not_requested` or `unavailable`.
+A pushed commit is not necessarily a verified signature.
