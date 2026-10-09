@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 LibreCode coop and contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Offline signed Git benchmark
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/benchmark_signed_commits.py'
+      - 'scripts/run_benchmark_matrix.py'
+      - 'tests/test_benchmark_comparison.py'
+      - 'tests/test_workflow_helpers.py'
+      - 'tests/test_benchmark_signed_commits.py'
+      - 'src/git_signing_mcp/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout comparison harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout original revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: original
+          ref: 555f0066c435a1f2648c0b7e93277358c30ae9bf
+          persist-credentials: false
+      - name: Checkout integrated revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: integrated
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Python setup
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install harness requirements
+        run: python -m pip install -e "./harness[dev]"
+      - name: Compare on identical disposable local remotes
+        run: python harness/scripts/run_benchmark_matrix.py --output-dir "$RUNNER_TEMP"
+      - name: Upload reproducible raw observations
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-signed-git-comparison
+          path: ${{ runner.temp }}/*-*.json
+          retention-days: 14

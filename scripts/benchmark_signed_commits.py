@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import inspect
 import json
 import math
+import resource
 import os
 import shutil
 import subprocess
@@ -49,8 +51,12 @@ def summarize(rows: list[dict]) -> dict:
         for key, value in row["timings_ms"].items():
             timings[key].append(value)
         counts.update(row["counts"])
+    bursts = {r["round"]: r["burst_wall_ms"] for r in rows if "burst_wall_ms" in r}
+    accepted = sum(r["outcome"] == "ok" for r in rows)
     return {
         "attempts": len(rows),
+        "successful_writes_per_second": (round(1000 * accepted / sum(bursts.values()), 3)
+                                         if bursts and sum(bursts.values()) else None),
         "outcomes": dict(sorted(Counter(row["outcome"] for row in rows).items())),
         "timings_ms": {
             key: {"p50": percentile(values, 50), "p95": percentile(values, 95)}
@@ -192,6 +198,14 @@ def seed_remote(remote: Path, fingerprint: str, gpg_home: Path, root: Path) -> N
     shutil.rmtree(seed)
 
 
+def branch_for(agent: int, round_number: int, agents: int, shared: bool) -> str:
+    # Every workload size must use disjoint refs; otherwise repeated matrices
+    # measure branch-already-exists failures rather than distinct signed writes.
+    if shared:
+        return f"bench/shared-agents-{agents}-round-{round_number}"
+    return f"bench/agent-{agent}-agents-{agents}-round-{round_number}"
+
+
 def payload(agent: int, round_number: int, size: str, mode: str):
     lines = 4 if size == "small" else 512
     content = "".join(f"benchmark fixture line {i:04d} for agent {agent}\n" for i in range(lines))
@@ -207,24 +221,29 @@ def run_batch(
     *, agents: int, round_number: int, guard: WriteGuard, settings,
     cache, key_cache, key: str, passphrase: str | None, fingerprint: str,
     gpg_home: Path, branch_mode: str, repo_mode: str,
-    size: str, change_mode: str, verify: bool,
+    size: str, change_mode: str, verify: bool, base_shas: dict[str, str],
 ) -> list[dict]:
     barrier = threading.Barrier(agents)
     def worker(index: int) -> dict:
         rec = Recorder()
         token = _current.set(rec)
         repository = f"bench/repo-{index}" if repo_mode == "separate" else "bench/repo-0"
-        branch = (f"bench/shared-{round_number}" if branch_mode == "shared"
-                  else f"bench/agent-{index}-round-{round_number}")
+        branch = branch_for(index, round_number, agents, branch_mode == "shared")
         changes, patch = payload(index, round_number, size, change_mode)
         start = time.perf_counter()
         outcome = "ok"
+        queued = None
+        admitted = False
         sha = None
         try:
             barrier.wait(timeout=30)
             queued = time.perf_counter()
             with guard.hold():
+                admitted = True
                 rec.timings_ms["queue_wait"] += (time.perf_counter() - queued) * 1000
+                intent = ({"mode": "create", "expected_base_sha": base_shas[repository]}
+                          if "mode" in inspect.signature(gitops.create_signed_commit).parameters
+                          else {})
                 sha = gitops.create_signed_commit(
                     settings=settings, github_token="fixture-only-not-a-token",
                     signing_key=key, signing_passphrase=passphrase,
@@ -232,6 +251,7 @@ def run_batch(
                     expected_head_sha=None, changes=changes, patch=patch,
                     message="test: benchmark disposable write",
                     repository_cache=cache, openpgp_cache=key_cache,
+                    **intent,
                 )
             if verify:
                 started = time.perf_counter()
@@ -248,15 +268,21 @@ def run_batch(
                 rec.counts["local_verification_calls"] += 2
         except Exception as exc:
             # Exception classes only: never emit secrets, paths, commit messages or Git stderr.
-            if isinstance(exc, RuntimeError) and "concurrency limit" in str(exc):
+            if getattr(exc, "code", None) == "concurrency_busy" or (
+                isinstance(exc, RuntimeError) and "concurrency limit" in str(exc)
+            ):
                 outcome = "concurrency_busy"
-            elif isinstance(exc, RuntimeError) and "rate limit" in str(exc):
+            elif getattr(exc, "code", None) == "rate_limited" or (
+                isinstance(exc, RuntimeError) and "rate limit" in str(exc)
+            ):
                 outcome = "rate_limited"
             elif isinstance(exc, ValueError) and "empty commit" in str(exc):
                 outcome = "empty_commit"
             else:
                 outcome = type(exc).__name__
         finally:
+            if queued is not None and not admitted:
+                rec.timings_ms["queue_wait"] += (time.perf_counter() - queued) * 1000
             rec.timings_ms["end_to_end"] += (time.perf_counter() - start) * 1000
             _current.reset(token)
         return {
@@ -264,8 +290,13 @@ def run_batch(
             "timings_ms": {key: round(value, 3) for key, value in rec.timings_ms.items()},
             "counts": dict(rec.counts),
         }
+    batch_started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=agents) as executor:
-        return list(executor.map(worker, range(agents)))
+        rows = list(executor.map(worker, range(agents)))
+    burst_ms = (time.perf_counter() - batch_started) * 1000
+    for row in rows:
+        row["burst_wall_ms"] = round(burst_ms, 3)
+    return rows
 
 
 def measure(args: argparse.Namespace) -> dict:
@@ -290,7 +321,19 @@ def measure(args: argparse.Namespace) -> dict:
             max_concurrent_writes=args.max_concurrent_writes,
             max_writes_per_minute=args.max_writes_per_minute,
         )
+        base_shas = {name: checked(["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"]) for name, remote in _remotes.items()}
         stats_before = folder_usage(root)
+        sampled_peak = stats_before.copy()
+        sampler_stop = threading.Event()
+
+        def sample_footprint() -> None:
+            while not sampler_stop.wait(0.05):
+                reading = folder_usage(root)
+                for unit in ("bytes", "inodes"):
+                    sampled_peak[unit] = max(sampled_peak[unit], reading[unit])
+
+        sampler = threading.Thread(target=sample_footprint, daemon=True)
+        sampler.start()
         scenarios = []
         original_run = gitops.subprocess.run
         gitops.subprocess.run = instrumented_run
@@ -310,6 +353,7 @@ def measure(args: argparse.Namespace) -> dict:
                         ), fingerprint=fingerprint, gpg_home=key_home,
                         branch_mode=args.branches, repo_mode=args.repositories,
                         size=args.size, change_mode=args.mode, verify=args.verify,
+                        base_shas=base_shas,
                     )
                     rows.extend(batch)
                 scenarios.append({
@@ -319,11 +363,14 @@ def measure(args: argparse.Namespace) -> dict:
                     "all": summarize(rows),
                 })
         finally:
+            sampler_stop.set()
+            sampler.join(timeout=2)
             gitops.subprocess.run = original_run
             tempfile.tempdir = previous_tempdir
         stats_after = folder_usage(root)
         vfs = os.statvfs(root)
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(os.environ.get("MEASURED_CHECKOUT_PATH",
+                                       str(Path(__file__).resolve().parent.parent)))
         revision_result = _real_run(
             ["git", "rev-parse", "--verify", "HEAD"], cwd=repo_root,
             capture_output=True, text=True, check=False,
@@ -334,6 +381,7 @@ def measure(args: argparse.Namespace) -> dict:
             "measured_checkout_revision": (
                 revision_result.stdout.strip() if revision_result.returncode == 0 else None
             ),
+            "measured_gitops_source": str(Path(gitops.__file__).resolve()),
             "environment": {
                 "python": os.sys.version.split()[0],
                 "git": checked(["git", "--version"]),
@@ -349,16 +397,19 @@ def measure(args: argparse.Namespace) -> dict:
                 "verification": "local_GPG_and_DCO" if args.verify else "disabled",
                 "passphrase_key": args.passphrase,
                 "rounds": args.rounds,
+                "active_compare_and_swap_mode": "mode" in inspect.signature(gitops.create_signed_commit).parameters,
             },
             "footprint": {
                 "before": stats_before, "after": stats_after,
-                "note": "directory bytes/inodes; not a sampled peak or container RSS",
+                "sampled_peak": sampled_peak,
+                "process_max_rss_kib_linux": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                "note": "sampled every 50ms; peaks may be missed; RSS includes setup",
             },
             "unmeasured": [
                 "ChatGPT model/tool approval latency", "tunnel admission and forwarding",
                 "GitHub REST requests and GitHub verification latency",
                 "network Git fetch/push latency", "OpenBao secret cache",
-                "peak tmpfs use during requests", "end-to-end live server queue",
+                "exact peak tmpfs between samples", "end-to-end live server queue",
             ],
             "scenarios": scenarios,
         }

@@ -26,3 +26,31 @@ When using local Git, git commit -s is the preferred way to add it.
 
 Do not commit private keys, GitHub tokens, OpenBao AppRole credentials, .env
 files, or production bearer tokens.
+
+## CI helpers and local reproduction
+
+CI YAML is deliberately orchestration-only. Exercise the Python commands and
+security assertions without Docker/GitHub credentials:
+
+```bash
+pytest -q tests/test_workflow_helpers.py
+ruff check src tests scripts
+```
+
+- `scripts/run_benchmark_matrix.py` owns the original/integrated revision
+  matrix, checks the pinned baseline, and emits `BENCHMARK_JSON` reports.
+  It requires three local checkouts (`harness`, `original`, `integrated`)
+  when run with its defaults, and a disposable root:
+  `python harness/scripts/run_benchmark_matrix.py --output-dir /tmp/bench-output`.
+  Provide `--tmpfs-root` if `/dev/shm` is unavailable. It writes only to
+  the supplied output directory and temporary fixture roots.
+- `scripts/check_compose.py` invokes Docker Compose with temporary dummy
+  secrets and checks network isolation, unpublished ports, and .dockerignore.
+  It refuses to overwrite an existing credential. Set
+  `OPENAI_TUNNEL_ID`, `GIT_IDENTITY_NAME` and `GIT_IDENTITY_EMAIL` as
+  in `.github/workflows/compose.yml` for a standalone run.
+- `scripts/smoke_image.py git-signing-mcp:test` verifies importability
+  and unprivileged UID on an already-built image.
+
+These helpers require no production GitHub or OpenBao tokens. The benchmark
+compares disposable local Git operations, never a production push.
