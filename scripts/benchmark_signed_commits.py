@@ -50,8 +50,12 @@ def summarize(rows: list[dict]) -> dict:
         for key, value in row["timings_ms"].items():
             timings[key].append(value)
         counts.update(row["counts"])
+    bursts = {r["round"]: r["burst_wall_ms"] for r in rows if "burst_wall_ms" in r}
+    accepted = sum(r["outcome"] == "ok" for r in rows)
     return {
         "attempts": len(rows),
+        "successful_writes_per_second": (round(1000 * accepted / sum(bursts.values()), 3)
+                                         if bursts and sum(bursts.values()) else None),
         "outcomes": dict(sorted(Counter(row["outcome"] for row in rows).items())),
         "timings_ms": {
             key: {"p50": percentile(values, 50), "p95": percentile(values, 95)}
@@ -220,11 +224,14 @@ def run_batch(
         changes, patch = payload(index, round_number, size, change_mode)
         start = time.perf_counter()
         outcome = "ok"
+        queued = None
+        admitted = False
         sha = None
         try:
             barrier.wait(timeout=30)
             queued = time.perf_counter()
             with guard.hold():
+                admitted = True
                 rec.timings_ms["queue_wait"] += (time.perf_counter() - queued) * 1000
                 intent = ({"mode": "create", "expected_base_sha": base_shas[repository]}
                           if "mode" in inspect.signature(gitops.create_signed_commit).parameters
@@ -253,15 +260,21 @@ def run_batch(
                 rec.counts["local_verification_calls"] += 2
         except Exception as exc:
             # Exception classes only: never emit secrets, paths, commit messages or Git stderr.
-            if isinstance(exc, RuntimeError) and "concurrency limit" in str(exc):
+            if getattr(exc, "code", None) == "concurrency_busy" or (
+                isinstance(exc, RuntimeError) and "concurrency limit" in str(exc)
+            ):
                 outcome = "concurrency_busy"
-            elif isinstance(exc, RuntimeError) and "rate limit" in str(exc):
+            elif getattr(exc, "code", None) == "rate_limited" or (
+                isinstance(exc, RuntimeError) and "rate limit" in str(exc)
+            ):
                 outcome = "rate_limited"
             elif isinstance(exc, ValueError) and "empty commit" in str(exc):
                 outcome = "empty_commit"
             else:
                 outcome = type(exc).__name__
         finally:
+            if queued is not None and not admitted:
+                rec.timings_ms["queue_wait"] += (time.perf_counter() - queued) * 1000
             rec.timings_ms["end_to_end"] += (time.perf_counter() - start) * 1000
             _current.reset(token)
         return {
@@ -269,8 +282,13 @@ def run_batch(
             "timings_ms": {key: round(value, 3) for key, value in rec.timings_ms.items()},
             "counts": dict(rec.counts),
         }
+    batch_started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=agents) as executor:
-        return list(executor.map(worker, range(agents)))
+        rows = list(executor.map(worker, range(agents)))
+    burst_ms = (time.perf_counter() - batch_started) * 1000
+    for row in rows:
+        row["burst_wall_ms"] = round(burst_ms, 3)
+    return rows
 
 
 def measure(args: argparse.Namespace) -> dict:
