@@ -58,6 +58,7 @@ def test_native_mcp_output_schema_and_result_contract(monkeypatch):
 
 def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
     import importlib
+    import json
     from starlette.testclient import TestClient
 
     monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
@@ -107,7 +108,11 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
         assert initialization["instructions"]
         tools = call(client, "tools/list", request_id=2)["tools"]
         signed_write = next(t for t in tools if t["name"] == "create_signed_git_commit")
-        assert signed_write["outputSchema"]
+        output_schema = signed_write["outputSchema"]
+        assert "result" not in output_schema.get("required", [])
+        assert "result" not in output_schema.get("properties", {})
+        assert "success" in output_schema.get("properties", {})
+        assert "commit_sha" in output_schema.get("properties", {})
         assert signed_write["annotations"]["destructiveHint"] is True
         error = call(
             client, "tools/call", {
@@ -132,90 +137,44 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
         assert "github_pat_sensitive_token" not in str(error)
         assert error["content"][0]["type"] == "text"
 
-
-def test_streamable_http_signed_write_success_matches_advertised_schema(monkeypatch):
-    """Regression: an already-pushed commit must not fail SDK result validation."""
-    import importlib
-    import json
-
-    import anyio
-    from starlette.testclient import TestClient
-
-    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
-    monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
-    monkeypatch.setenv("GIT_IDENTITY_EMAIL", "1079143+vitormattos@users.noreply.github.com")
-    server = importlib.import_module("git_signing_mcp.server")
-    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
-    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
-    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
-    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
-    monkeypatch.setattr(server.secrets, "github_token", lambda: "token")
-    called = []
-
-    def signed_push(**kwargs):
-        called.append(kwargs["branch"])
-        return "a" * 40
-
-    monkeypatch.setattr(server, "create_signed_commit", signed_push)
-    monkeypatch.setattr(
-        server, "_verification_after_push",
-        lambda repository, sha, enabled: (True, "valid", 1),
-    )
-    args = {
-        "request": {
-            "repository": "owner/repo",
-            "branch": "feature/disposable",
-            "mode": "create",
-            "expected_base_sha": "b" * 40,
-            "message": "test: signed commit",
-            "changes": [{"path": "README.md", "content": "test"}],
+        # Exercise success through the *same* HTTP session manager: MCP 2.x
+        # prohibits restarting the same StreamableHTTPSessionManager instance.
+        monkeypatch.setattr(server, "create_signed_commit", lambda **kwargs: "a" * 40)
+        monkeypatch.setattr(
+            server, "_verification_after_push",
+            lambda repository, sha, enabled: (True, "valid", 1),
+        )
+        request = {
+            "request": {
+                "repository": "owner/repo",
+                "branch": "feature/disposable",
+                "mode": "create",
+                "expected_base_sha": "b" * 40,
+                "message": "test: signed commit",
+                "changes": [{"path": "README.md", "content": "test"}],
+            }
         }
-    }
-    headers = {
-        "Accept": "application/json, text/event-stream",
-        "Content-Type": "application/json",
-    }
-
-    with TestClient(server.mcp_app, base_url="http://mcp") as client:
-        response = client.post(
-            "/mcp", headers=headers,
-            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        success = call(
+            client, "tools/call",
+            {"name": "create_signed_git_commit", "arguments": request},
+            request_id=4,
         )
-        assert response.status_code == 200
-        listing = response.json()["result"]["tools"]
-        spec = next(t for t in listing if t["name"] == "create_signed_git_commit")
-        schema = spec["outputSchema"]
-        assert "result" not in schema.get("required", [])
-        assert "result" not in schema.get("properties", {})
-        assert "commit_sha" in schema["properties"]
-
-        response = client.post(
-            "/mcp", headers=headers,
-            json={
-                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                "params": {
-                    "name": "create_signed_git_commit",
-                    "arguments": args,
-                },
-            },
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert "error" not in body
-        result = body["result"]
-        assert result.get("isError", False) is False
-        payload = result["structuredContent"]
+        assert success.get("isError", False) is False
+        payload = success["structuredContent"]
         assert payload["success"] is True
         assert payload["commit_sha"] == "a" * 40
         assert payload["write_outcome"] == "pushed"
         assert payload["verification_status"] == "verified"
         assert "result" not in payload
-        assert json.loads(result["content"][0]["text"]) == payload
+        assert json.loads(success["content"][0]["text"]) == payload
+
+    # Direct SDK call also validates the successful, flat output.
+    import anyio
 
     async def direct_call():
-        return await server.mcp.call_tool("create_signed_git_commit", args)
+        return await server.mcp.call_tool("create_signed_git_commit", request)
 
     direct = anyio.run(direct_call)
     assert direct.is_error is False
     assert direct.structured_content["commit_sha"] == "a" * 40
-    assert called == ["feature/disposable", "feature/disposable"]
+
