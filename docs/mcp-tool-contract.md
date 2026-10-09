@@ -7,7 +7,8 @@ The server advertises native MCP `structuredContent`, a matching compact JSON
 `content` fallback and an `outputSchema` for signed writes. An operational
 tool failure sets `isError=true` and returns a stable, sanitized object.
 A successful response has `success=true`, `write_outcome=pushed`, and the
-commit SHA. This version does not yet resolve push-time ambiguity (#38).
+commit SHA. Push transport ambiguity is handled by bounded remote-head reconciliation (#38).
+If the remote outcome cannot be confirmed, the result is explicitly `unknown`.
 
 An error contains `request_id`, `error_code`, `phase`,
 `write_outcome`, `retry_disposition`, `next_action`, and `message`.
@@ -34,9 +35,15 @@ messages or model-visible errors.
 `get_identity.tool_schema_version` is now `4`. Schema changes are **not**
 automatically reflected in an existing ChatGPT connection: refresh/scan the
 MCP plugin, then start a fresh conversation if the old schema remains cached.
-The existing commit tool name and the accepted request fields are unchanged
-for this phase. Branch intent will become explicit with issue #37; clients
-must refresh their schema before using the new safe write contract.
+The commit tool retains its name, but v4 **requires** explicit branch intent
+(`mode=create` with `expected_base_sha`, or `mode=update` with
+`expected_head_sha`). Older v3 calls are intentionally rejected. Agents must
+rescan before writing.
+
+A confirmed pushed commit can have `verification_status=unverified`,
+`not_requested` or `unavailable`; in those cases `next_action=verify_commit`.
+Only `verification_status=verified` authorizes assuming GitHub verified
+the cryptographic signature.
 
 Validate on deployment through Streamable HTTP initialization, tools/list,
 tools/call (successful and failing calls), and a private tunnel smoke test.

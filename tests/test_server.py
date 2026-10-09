@@ -4,6 +4,8 @@
 
 import importlib
 
+import pytest
+
 
 def test_verification_after_push_skips_lookup_when_disabled(monkeypatch):
     monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
@@ -131,3 +133,41 @@ def test_ambiguous_push_is_reconciled_only_on_error(monkeypatch):
     assert result.is_error is False
     assert result.structured_content["write_outcome"] == "pushed"
     assert result.structured_content["commit_sha"] == "c" * 40
+
+
+@pytest.mark.parametrize(
+    ("verified", "reason", "wait", "status", "expected_action"),
+    [
+        (True, "valid", True, "verified", "none"),
+        (False, "unsigned", True, "unverified", "verify_commit"),
+        (False, "not_checked", False, "not_requested", "verify_commit"),
+    ],
+)
+def test_confirmed_push_returns_verification_next_action(
+    monkeypatch, verified, reason, wait, status, expected_action
+):
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "token")
+    monkeypatch.setattr(server, "create_signed_commit", lambda **kwargs: "c" * 40)
+    monkeypatch.setattr(
+        server, "_verification_after_push",
+        lambda repository, sha, requested: (verified, reason, 1 if requested else 0),
+    )
+    request = models.CommitRequest(
+        repository="owner/repo", branch="feature/test", mode="update",
+        expected_head_sha="b" * 40, message="test",
+        changes=[models.FileChange(path="README.md", content="content")],
+        wait_for_verification=wait,
+    )
+    response = server.create_signed_git_commit(request)
+    data = response.structured_content
+    assert response.is_error is False
+    assert data["write_outcome"] == "pushed"
+    assert data["verification_status"] == status
+    assert data["cryptographic_verification"] is verified
+    assert data["next_action"] == expected_action

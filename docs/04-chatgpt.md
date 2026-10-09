@@ -57,33 +57,37 @@ In the ChatGPT workspace:
 6. do not publish or share it to the workspace;
 7. scan the tools.
 
-After upgrading the MCP server, scan/reload the app tools again. Tool schemas are
-cached by the ChatGPT app, so new request fields such as `patch` or
-`wait_for_verification` may remain unavailable to an already-loaded
-conversation even when the server is already running the new code.
-
-If `get_identity` reports `tool_schema_version: "2"` but the visible
-`create_signed_git_commit` schema still exposes only `changes`, rescan the app
-tools and start a new conversation. That mismatch means the server is current but
-the conversation still holds an older tool schema.
+After upgrading the MCP server, **rescan/reload the app tools** and start a
+new conversation if the existing chat still exposes a cached schema. The v4
+contract is a breaking change: `get_identity.tool_schema_version` must be `"4"`,
+and `create_signed_git_commit` requires `mode="create"` plus an
+`expected_base_sha`, or `mode="update"` plus an `expected_head_sha`.
+Do not bypass this precondition by issuing a call with the older v3 schema.
 
 This service has access to a personal Git signing identity. Treat app access as
 the ability to request signatures within the MCP's repository/branch policy.
 
 ## 5. Validate in ChatGPT
 
-Test in this order:
+Test in this order using only a disposable, authorized feature branch:
 
-1. `get_identity` — confirm the fixed name, email, `openpgp` format, and the
-   expected `tool_schema_version`;
-2. `verify_commit` — verify a known commit;
-3. `create_signed_git_commit` — create one commit on a disposable feature
-   branch, never on a protected branch;
-4. confirm GitHub reports the commit signature as Verified;
-5. confirm Author and `Signed-off-by` use the configured identity;
-6. when schema version 2 is visible, repeat the disposable-branch test with
-   `patch`, then test `wait_for_verification=false` followed by an explicit
-   `verify_commit`.
+1. `get_identity` — confirm the configured name/email, `openpgp` and
+   `tool_schema_version="4"`.
+2. `verify_commit` — check an existing known signed commit.
+3. Obtain the current base HEAD from GitHub and create a new disposable branch
+   with `mode="create"`, `base_branch="main"`,
+   `expected_base_sha="<observed-main-head>"`, a commit message and either
+   `changes` or `patch`. Do not supply `expected_head_sha` in create mode.
+4. Update that existing branch using `mode="update"` and
+   `expected_head_sha="<returned-commit-sha>"`. Never supply a base SHA as
+   the target HEAD.
+5. Verify GitHub's cryptographic signature and DCO after the commit. A
+   `write_outcome=pushed` with `verification_status` other than `verified`
+   is **not** cryptographically verified; follow `next_action=verify_commit`.
+6. Check a stale HEAD on the disposable branch, confirm a structured
+   `isError=true` / `structuredContent` result, and **do not** blindly retry.
+7. Verify no protected-branch write was attempted. Optionally test
+   `wait_for_verification=false`; this intentionally defers verification.
 
 For performance validation, inspect the MCP audit log after a commit:
 

@@ -206,15 +206,26 @@ docker compose ps
 
 OpenBao should auto-unseal after its container restarts.
 
-## M. Post-upgrade smoke test
+## M. Post-upgrade smoke test (schema v4)
 
-```text
-get_identity
-  -> tool_schema_version=2
-create_signed_git_commit on a disposable feature branch
-  -> signed commit
-  -> matching DCO
-  -> no protected-branch write
-verify_commit
-  -> cryptographic_verification=true
-```
+Confirm the running container and ChatGPT tool metadata both expose
+`get_identity.tool_schema_version="4"`. Rescan tools and open a new ChatGPT
+conversation if the old v3 schema remains cached.
+
+On a disposable, allowlisted feature branch only:
+
+1. Read the current `main` SHA from GitHub.
+2. Call `create_signed_git_commit` with `mode="create"` and
+   `expected_base_sha` set to that SHA. Confirm `write_outcome=pushed`.
+3. Update it with `mode="update"` and `expected_head_sha` set to the
+   returned feature-branch commit SHA.
+4. Confirm the signature is verified by GitHub and DCO matches the author.
+   If `verification_status` is `unverified`, `not_requested`, or
+   `unavailable`, call `verify_commit` instead of assuming verification.
+5. Use a deliberately stale target SHA on the disposable branch to confirm a
+   structured recoverable `isError` response. Never retry an
+   `unknown_write_outcome` before inspecting the remote branch.
+
+See `docs/04-chatgpt.md` and `docs/08-post-integration-benchmark.md` for
+the private tunnel acceptance gate. Keep OpenBao and live repositories out of
+any synthetic concurrency/load tests.
