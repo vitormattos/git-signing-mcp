@@ -252,7 +252,7 @@ changes in #50 cannot satisfy this gate.
 
 ### Optional staging-only direct MCP load runner
 
-The standalone \`scripts/staging_mcp_load.py\` exercises **only** a separate
+The standalone `scripts/staging_mcp_load.py` exercises **only** a separate
 staging MCP HTTP service from inside an isolated staging Docker network. It
 measures the 1/5/10-concurrent **MCP service + GitHub + OpenBao** path,
 including rejected requests and verified commit SHAs. It cannot test Secure
@@ -262,18 +262,18 @@ Create a disposable staging GitHub repository and separate signing key/secret;
 do not use the real personal key or production credentials. The default is a
 **dry-run**, which prints a plan and never contacts the network:
 
-\`\`\`sh
+```sh
 python scripts/staging_mcp_load.py \
   --repository EXAMPLE/mcp-benchmark \
   --expected-base-sha 0123456789abcdef0123456789abcdef01234567 \
   --run-id test1
-\`\`\`
+```
 
-When the staging MCP is reachable at \`http://mcp:8080/mcp\`, run with an
+When the staging MCP is reachable at `http://mcp:8080/mcp`, run with an
 explicit repository confirmation, staging-only header secret from a
 readable file, and a report destination:
 
-\`\`\`sh
+```sh
 python scripts/staging_mcp_load.py \
   --repository EXAMPLE/mcp-benchmark \
   --confirm-disposable-repository EXAMPLE/mcp-benchmark \
@@ -283,7 +283,7 @@ python scripts/staging_mcp_load.py \
   --auth-file /staging/secrets/mcp_tunnel_shared_secret \
   --output /staging/results/issue39-direct.json \
   --execute
-\`\`\`
+```
 
 This creates up to 32 **new sandbox branches** and intentionally does not
 delete branches or retry unknown push outcomes. Review outcomes and reconcile

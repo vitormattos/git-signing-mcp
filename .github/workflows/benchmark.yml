@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/benchmark.yml'
       - 'scripts/benchmark_signed_commits.py'
+      - 'scripts/staging_mcp_load.py'
+      - 'tests/test_staging_mcp_load.py'
       - 'scripts/run_benchmark_matrix.py'
       - 'tests/test_benchmark_comparison.py'
       - 'tests/test_workflow_helpers.py'
