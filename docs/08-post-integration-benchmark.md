@@ -131,3 +131,38 @@ retaining an early rate-limit check and a second check under the quota lock.
 The tests prove concurrency-busy rejects spend zero quota, accepted requests
 consume one token, and two racing admissions cannot overspend a single token.
 This is a correctness correction; it is **not** evidence for increasing limits.
+
+## Final PR revision: actual tmpfs sample
+
+The revised workflow on `6b8f94157de6d6229817b7709edec42804da5862`
+also ran `--root /dev/shm` with **5 admitted writers**, separate disposable
+repositories, medium files, 1/5/10 simultaneous agents, and two bursts each.
+The mount is tmpfs on the CI Linux runner, **not** the production 1 GiB
+container mount.
+
+| Revision | Agents | p50/p95 (ms) | Completed writes/s | Queue p95 (ms) |
+|---|---:|---:|---:|---:|
+| Original | 1 | 45.9 / 62.6 | 18.16 | 0.017 |
+| Integrated | 1 | 47.2 / 63.9 | 17.80 | 0.017 |
+| Original | 5 | 90.5 / 106.9 | 49.10 | 0.027 |
+| Integrated | 5 | 96.1 / 107.1 | 47.88 | 0.015 |
+| Original | 10 | 145.4 / 201.1 | 48.75 | 105.6 |
+| Integrated | 10 | 124.4 / 208.8 | 47.29 | 98.0 |
+
+Every tmpfs operation succeeded (32 signed writes per revision). The
+50-ms sampler observed at most **723,774 bytes / 1,193 inodes** on the
+original revision and **658,069 bytes / 1,150 inodes** on the integrated
+revision. These are **sampled directory footprints**, *not* guarantees of
+peak mount occupancy or evidence that a larger PDF workload fits in 1 GiB.
+Process RSS high-water was 33,848 KiB original vs 34,004 KiB integrated,
+including fixture setup. No remote GitHub calls, OpenBao calls or real
+tunnel requests occurred.
+
+For independent repositories on the same runner in this second run,
+10-agent throughput was 24.38 original vs 44.06 integrated writes/s, while
+the earlier corrected run was 34.63 vs 34.90. That variability is strong
+evidence **against** claiming a speedup from two short CI samples. Test
+larger distributions on stable hardware before any performance tuning.
+
+CI also covers the isolated semaphore/quota accounting fix with three
+new deterministic tests. It does not show a tunnel latency improvement.
