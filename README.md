@@ -50,6 +50,7 @@ Pull requests lint, build, and smoke-test the image without publishing it.
 4. [ChatGPT integration](docs/04-chatgpt.md)
 5. [Security architecture](docs/05-security.md)
 6. [Commit signing](docs/06-signing.md)
+7. [ChatGPT app information and MCP metadata](docs/09-chatgpt-app-profile.md)
 
 ## Local development
 

@@ -17,6 +17,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import __version__
 from .auth import TunnelAccessMiddleware
 from .config import Settings
 from .github import GitHubClient
@@ -49,11 +50,24 @@ repository_cache = RepositoryCache(settings.repo_cache_dir)
 openpgp_cache = OpenPGPKeyCache(settings.gpg_home_dir)
 mcp = MCPServer(
     "git-signing-mcp",
+    title="Git Signing MCP",
+    description=(
+        "Self-hosted MCP for creating and verifying OpenPGP/SSH-signed Git commits with "
+        "DCO. Enforces authorized GitHub repositories, protected-branch policy and "
+        "checked branch versions to prevent silent concurrent overwrites. "
+        "The private ChatGPT deployment uses Secure MCP Tunnel and OpenBao. "
+        "It does not merge pull requests, rebase branches or resolve code conflicts."
+    ),
+    website_url="https://github.com/vitormattos/git-signing-mcp",
+    version=__version__,
     instructions=(
-        "Signed writes require a fresh target HEAD for updates or an exact base HEAD for "
-        "new branches. Never retry an unknown push outcome blindly; inspect the remote "
-        "branch first. The agent, not this server, handles rebases, merge conflicts, CI "
-        "and pull requests. Repository and branch authorization is enforced server-side."
+        "For a new branch, use create_signed_git_commit mode=create with the exact "
+        "expected_base_sha of the reviewed base branch. For an existing branch, "
+        "use mode=update with the fresh target expected_head_sha. "
+        "Do not blindly retry ambiguous or stale writes; inspect the remote state "
+        "and reconcile changes first. Use verify_commit if signing verification "
+        "was skipped, unavailable or unverified. The agent handles PRs, CI, rebases "
+        "and merge conflicts; the server enforces repository/branch policies."
     ),
 )
 
@@ -109,6 +123,7 @@ def _verification_after_push(
 
 
 @mcp.tool(
+    title="Get signing identity",
     annotations=ToolAnnotations(
         read_only_hint=True,
         destructive_hint=False,
@@ -123,10 +138,12 @@ def get_identity() -> dict[str, str]:
         "email": settings.git_identity_email,
         "signing_format": settings.signing_format,
         "tool_schema_version": "4",
+        "server_version": __version__,
     }
 
 
 @mcp.tool(
+    title="Verify signed commit",
     annotations=ToolAnnotations(
         read_only_hint=True,
         destructive_hint=False,
@@ -197,6 +214,7 @@ def _failure(
 
 
 @mcp.tool(
+    title="Create signed Git commit",
     annotations=ToolAnnotations(
         read_only_hint=False,
         destructive_hint=True,

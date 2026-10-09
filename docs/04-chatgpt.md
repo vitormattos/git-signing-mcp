@@ -57,6 +57,13 @@ In the ChatGPT workspace:
 6. do not publish or share it to the workspace;
 7. scan the tools.
 
+The server supplies its name, version, description, website and shared agent
+instructions through MCP initialization. This data does **not** automatically
+replace ChatGPT's separately editable app name, description, logo, developer
+or review status. See [ChatGPT app profile](09-chatgpt-app-profile.md) for
+suggested display text and verification steps. No additional MCP endpoint or
+tool call is needed for the initialization metadata.
+
 After upgrading the MCP server, **rescan/reload the app tools** and start a
 new conversation if the existing chat still exposes a cached schema. The v4
 contract is a breaking change: `get_identity.tool_schema_version` must be `"4"`,
