@@ -69,8 +69,23 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
     monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
     monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
     from git_signing_mcp import gitops
-    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("sensitive-private-key", None))
-    monkeypatch.setattr(server.secrets, "github_token", lambda: "github_pat_sensitive_token")
+    secret_reads = []
+
+    def signing_material():
+        secret_reads.append("signing")
+        return ("sensitive-private-key", None)
+
+    def github_token():
+        secret_reads.append("github")
+        return "github_pat_sensitive_token"
+
+    monkeypatch.setattr(server.secrets, "signing_material", signing_material)
+    monkeypatch.setattr(server.secrets, "github_token", github_token)
+
+    def forbid_github_request(*args, **kwargs):
+        raise AssertionError("MCP initialization must not query GitHub")
+
+    monkeypatch.setattr(server.github.client, "get", forbid_github_request)
 
     def rejected_write(**kwargs):
         raise gitops.GitOperationError(
@@ -105,9 +120,42 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
                 "clientInfo": {"name": "protocol-test", "version": "1"},
             },
         )
-        assert initialization["instructions"]
+        from git_signing_mcp import __version__
+
+        info = initialization["serverInfo"]
+        assert info["name"] == "git-signing-mcp"
+        assert info["title"] == "Git Signing MCP"
+        assert info["version"] == __version__
+        assert info["websiteUrl"] == "https://github.com/vitormattos/git-signing-mcp"
+        assert "OpenPGP/SSH" in info["description"]
+        assert "DCO" in info["description"]
+        assert "merge" in info["description"]
+        assert "mode=create" in initialization["instructions"]
+        assert "expected_base_sha" in initialization["instructions"]
+        assert "mode=update" in initialization["instructions"]
+        assert "expected_head_sha" in initialization["instructions"]
+        assert "Do not blindly retry" in initialization["instructions"]
+        # No credentials or infrastructure secrets belong in discovery metadata.
+        discovery = json.dumps(initialization)
+        for secret in ("sensitive-private-key", "github_pat_sensitive_token",
+                       "openbao:8200", "mcp:8080"):
+            assert secret not in discovery
+
         tools = call(client, "tools/list", request_id=2)["tools"]
+        assert {tool["name"] for tool in tools} == {
+            "get_identity", "verify_commit", "create_signed_git_commit"
+        }
+        assert secret_reads == []
+        assert {tool["name"]: tool["title"] for tool in tools} == {
+            "get_identity": "Get signing identity",
+            "verify_commit": "Verify signed commit",
+            "create_signed_git_commit": "Create signed Git commit",
+        }
         signed_write = next(t for t in tools if t["name"] == "create_signed_git_commit")
+        input_schema = json.dumps(signed_write["inputSchema"])
+        assert "expected_base_sha" in input_schema
+        assert "expected_head_sha" in input_schema
+        assert "mode" in input_schema
         output_schema = signed_write["outputSchema"]
         assert "result" not in output_schema.get("required", [])
         assert "result" not in output_schema.get("properties", {})
