@@ -15,6 +15,7 @@ import contextvars
 import inspect
 import json
 import math
+import resource
 import os
 import shutil
 import subprocess
@@ -315,6 +316,17 @@ def measure(args: argparse.Namespace) -> dict:
         )
         base_shas = {name: checked(["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"]) for name, remote in _remotes.items()}
         stats_before = folder_usage(root)
+        sampled_peak = stats_before.copy()
+        sampler_stop = threading.Event()
+
+        def sample_footprint() -> None:
+            while not sampler_stop.wait(0.05):
+                reading = folder_usage(root)
+                for unit in ("bytes", "inodes"):
+                    sampled_peak[unit] = max(sampled_peak[unit], reading[unit])
+
+        sampler = threading.Thread(target=sample_footprint, daemon=True)
+        sampler.start()
         scenarios = []
         original_run = gitops.subprocess.run
         gitops.subprocess.run = instrumented_run
@@ -344,6 +356,8 @@ def measure(args: argparse.Namespace) -> dict:
                     "all": summarize(rows),
                 })
         finally:
+            sampler_stop.set()
+            sampler.join(timeout=2)
             gitops.subprocess.run = original_run
             tempfile.tempdir = previous_tempdir
         stats_after = folder_usage(root)
@@ -378,13 +392,15 @@ def measure(args: argparse.Namespace) -> dict:
             },
             "footprint": {
                 "before": stats_before, "after": stats_after,
-                "note": "directory bytes/inodes; not a sampled peak or container RSS",
+                "sampled_peak": sampled_peak,
+                "process_max_rss_kib_linux": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                "note": "sampled every 50ms; peaks may be missed; RSS includes setup",
             },
             "unmeasured": [
                 "ChatGPT model/tool approval latency", "tunnel admission and forwarding",
                 "GitHub REST requests and GitHub verification latency",
                 "network Git fetch/push latency", "OpenBao secret cache",
-                "peak tmpfs use during requests", "end-to-end live server queue",
+                "exact peak tmpfs between samples", "end-to-end live server queue",
             ],
             "scenarios": scenarios,
         }
