@@ -37,7 +37,14 @@ def test_native_mcp_output_schema_and_result_contract(monkeypatch):
     async def exercise():
         advertised = await server.mcp.list_tools()
         tools = {tool.name: tool for tool in advertised}
-        assert tools["create_signed_git_commit"].output_schema is not None
+        output = tools["create_signed_git_commit"].output_schema
+        assert output is not None
+        # Successful MCP tools/call responses must match the advertised flat shape.
+        # Annotating with a Union instead of a BaseModel wraps it in {"result": ...}.
+        assert "result" not in output.get("properties", {})
+        assert "result" not in output.get("required", [])
+        assert "success" in output.get("properties", {})
+        assert "commit_sha" in output.get("properties", {})
         assert tools["create_signed_git_commit"].annotations.destructive_hint is True
         for name in ("get_identity", "verify_commit"):
             assert tools[name].annotations.destructive_hint is False
@@ -51,6 +58,7 @@ def test_native_mcp_output_schema_and_result_contract(monkeypatch):
 
 def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
     import importlib
+    import json
     from starlette.testclient import TestClient
 
     monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
@@ -100,7 +108,11 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
         assert initialization["instructions"]
         tools = call(client, "tools/list", request_id=2)["tools"]
         signed_write = next(t for t in tools if t["name"] == "create_signed_git_commit")
-        assert signed_write["outputSchema"]
+        output_schema = signed_write["outputSchema"]
+        assert "result" not in output_schema.get("required", [])
+        assert "result" not in output_schema.get("properties", {})
+        assert "success" in output_schema.get("properties", {})
+        assert "commit_sha" in output_schema.get("properties", {})
         assert signed_write["annotations"]["destructiveHint"] is True
         error = call(
             client, "tools/call", {
@@ -124,3 +136,45 @@ def test_streamable_http_tool_schemas_and_native_errors(monkeypatch):
         assert "sensitive-private-key" not in str(error)
         assert "github_pat_sensitive_token" not in str(error)
         assert error["content"][0]["type"] == "text"
+
+        # Exercise success through the *same* HTTP session manager: MCP 2.x
+        # prohibits restarting the same StreamableHTTPSessionManager instance.
+        monkeypatch.setattr(server, "create_signed_commit", lambda **kwargs: "a" * 40)
+        monkeypatch.setattr(
+            server, "_verification_after_push",
+            lambda repository, sha, enabled: (True, "valid", 1),
+        )
+        request = {
+            "request": {
+                "repository": "owner/repo",
+                "branch": "feature/disposable",
+                "mode": "create",
+                "expected_base_sha": "b" * 40,
+                "message": "test: signed commit",
+                "changes": [{"path": "README.md", "content": "test"}],
+            }
+        }
+        success = call(
+            client, "tools/call",
+            {"name": "create_signed_git_commit", "arguments": request},
+            request_id=4,
+        )
+        assert success.get("isError", False) is False
+        payload = success["structuredContent"]
+        assert payload["success"] is True
+        assert payload["commit_sha"] == "a" * 40
+        assert payload["write_outcome"] == "pushed"
+        assert payload["verification_status"] == "verified"
+        assert "result" not in payload
+        assert json.loads(success["content"][0]["text"]) == payload
+
+    # Direct SDK call also validates the successful, flat output.
+    import anyio
+
+    async def direct_call():
+        return await server.mcp.call_tool("create_signed_git_commit", request)
+
+    direct = anyio.run(direct_call)
+    assert direct.is_error is False
+    assert direct.structured_content["commit_sha"] == "a" * 40
+
