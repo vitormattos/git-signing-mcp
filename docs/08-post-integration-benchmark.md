@@ -95,3 +95,39 @@ The presence of an active Git Signing MCP connector does not by itself
 establish that its requests were forwarded through the target Secure MCP
 Tunnel version. A successful staging test requires direct deployment,
 transport and tool-call evidence.
+
+## Observed retrospective results (GitHub Actions)
+
+The initial run had an invalid branch naming collision between the 1/5/10
+matrices; **discard those numbers**. The corrected run was measured against
+original `555f0066c435a1f2648c0b7e93277358c30ae9bf` and integrated
+`6c12039699ccb4b1b8247653950ffef82936ee67` on one runner.
+
+Separate-repository, 1/5/10-agent results (2 bursts per point):
+
+| Agents | Revision | End-to-end p50/p95 (ms) | Accepted writes/s |
+|---|---|---|---|
+| 1 | Original | 62.1 / 84.2 | 13.57 |
+| 1 | Integrated | 63.9 / 85.0 | 13.38 |
+| 5 | Original | 127.0 / 146.7 | 34.77 |
+| 5 | Integrated | 137.3 / 146.8 | 34.55 |
+| 10 | Original | 159.6 / 283.8 | 34.63 |
+| 10 | Integrated | 178.8 / 284.6 | 34.90 |
+
+Every scenario had only successful writes. Per successful **new** branch:
+2 local Git fetch attempts (target missing + base) and 1 push; no extra
+GitHub REST network requests are made by the offline harness. Import counts
+show reuse of the OpenPGP key cache. With single-write admission and ten
+agents, queue p95 was 549 ms (original) versus 570 ms (integrated); increased
+parallelism primarily reduces waiting. Differences are indicative only, not
+statistically significant evidence for tuning deployment defaults.
+
+### Admission accounting correctness
+
+The current main still debits `MAX_WRITES_PER_MINUTE` before acquiring the
+five-second write semaphore. Busy requests can therefore consume quota
+without writing. This PR corrects quota accounting **after admission** while
+retaining an early rate-limit check and a second check under the quota lock.
+The tests prove concurrency-busy rejects spend zero quota, accepted requests
+consume one token, and two racing admissions cannot overspend a single token.
+This is a correctness correction; it is **not** evidence for increasing limits.

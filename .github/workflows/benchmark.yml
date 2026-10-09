@@ -50,19 +50,25 @@ jobs:
           for revision in original integrated; do
             export PYTHONPATH="$GITHUB_WORKSPACE/$revision/src"
             export MEASURED_CHECKOUT_PATH="$GITHUB_WORKSPACE/$revision"
-            for profile in serial separated contended patch; do
+            for profile in serial separated contended patch tmpfs; do
               case "$profile" in
                 serial) writes=1; repos=same; payload=small; mode=files ;;
                 separated) writes=5; repos=separate; payload=small; mode=files ;;
                 contended) writes=5; repos=same; payload=small; mode=files ;;
                 patch) writes=5; repos=separate; payload=medium; mode=patch ;;
+                tmpfs) writes=5; repos=separate; payload=medium; mode=files ;;
               esac
+              root="$RUNNER_TEMP/signed-git-bench"
+              if [[ "$profile" == tmpfs ]]; then
+                test -d /dev/shm && df -h /dev/shm
+                root=/dev/shm
+              fi
               python harness/scripts/benchmark_signed_commits.py \
                 --agents 1 5 10 --rounds 2 \
                 --max-concurrent-writes "$writes" \
                 --max-writes-per-minute 600 \
                 --repositories "$repos" --size "$payload" --mode "$mode" \
-                --root "$RUNNER_TEMP/signed-git-bench" \
+                --root "$root" \
                 --output "$RUNNER_TEMP/$revision-$profile.json"
             done
           done
