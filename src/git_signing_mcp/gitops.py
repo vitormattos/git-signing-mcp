@@ -31,6 +31,12 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)(Authorization:\s*(?:Basic|Bearer)\s+)[^\s]+"),
     re.compile(r"(https://)[^/@\s]+@"),
 )
+# Git reports a per-ref refusal using this status, even when its reason is just "(failed)".
+# Only the single-ref push path may treat the status as a definitive non-write.
+_REMOTE_REF_REJECTED_RE = re.compile(
+    r"(?m)^[ \t]*![ \t]+\[remote rejected\][ \t]+\S+[ \t]+->[ \t]+\S+[ \t]+\([^\r\n]+\)[ \t]*$",
+    re.IGNORECASE,
+)
 
 
 class GitOperationError(RuntimeError):
@@ -55,7 +61,7 @@ class PushOutcomeError(GitOperationError):
         self.definitively_rejected = cause.code in {
             "github_write_forbidden", "github_authentication_failed",
             "github_branch_policy_rejected", "branch_head_changed",
-            "target_branch_exists", "target_head_mismatch",
+            "target_branch_exists", "target_head_mismatch", "remote_ref_rejected",
         }
 
 
@@ -141,6 +147,17 @@ def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
             message="The target branch changed before the push completed.",
             remediation=(
                 "Refresh the branch HEAD and retry with expected_head_sha set to the current SHA."
+            ),
+        )
+
+    if operation == "push" and _REMOTE_REF_REJECTED_RE.search(stderr):
+        return GitOperationError(
+            code="remote_ref_rejected",
+            operation="push",
+            message="The remote Git server rejected the ref update.",
+            remediation=(
+                "Inspect remote repository rules and server audit logs; "
+                "resolve the rejection and refresh the branch state before a new write."
             ),
         )
 

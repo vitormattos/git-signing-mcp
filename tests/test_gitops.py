@@ -327,6 +327,18 @@ def test_fetch_remote_branch_treats_missing_ref_as_absent(tmp_path: Path, monkey
         ("remote: Invalid username or token. Authentication failed.\n", "github_authentication_failed"),
         ("remote: error: GH013: Repository rule violations found.\n", "github_branch_policy_rejected"),
         ("! [rejected] HEAD -> feature/test (non-fast-forward)\n", "branch_head_changed"),
+        (
+            "To https://github.com/owner/repo.git\n"
+            " ! [remote rejected] HEAD -> feature/test (failed)\n"
+            "error: failed to push some refs to 'https://github.com/owner/repo.git'\n",
+            "remote_ref_rejected",
+        ),
+        (
+            " ! [remote rejected] HEAD -> feature/test (pre-receive hook declined)\n",
+            "remote_ref_rejected",
+        ),
+        (" ! [remote failure] HEAD -> feature/test (remote failed)\n", "git_operation_failed"),
+        ("fatal: unable to access remote: Connection timed out\n", "git_operation_failed"),
     ],
 )
 def test_run_classifies_actionable_git_failures(monkeypatch, tmp_path: Path, stderr: str, code: str):
@@ -348,6 +360,22 @@ def test_run_classifies_actionable_git_failures(monkeypatch, tmp_path: Path, std
     assert exc_info.value.code == code
     assert exc_info.value.operation == "push"
     assert exc_info.value.remediation
+
+
+@pytest.mark.parametrize(
+    ("stderr", "definitive"),
+    [
+        (" ! [remote rejected] HEAD -> feature/test (failed)\n", True),
+        (" ! [remote failure] HEAD -> feature/test (remote failed)\n", False),
+        ("fatal: unable to access remote: Connection timed out\n", False),
+    ],
+)
+def test_push_outcome_treats_only_explicit_remote_rejection_as_definitive(stderr, definitive):
+    cause = gitops._classify_git_failure(["git", "push", "origin", "HEAD:refs/heads/feature/test"], stderr)
+    outcome = gitops.PushOutcomeError(cause, "c" * 40)
+
+    assert outcome.definitively_rejected is definitive
+    assert outcome.commit_sha == "c" * 40
 
 
 def test_exact_push_leases_prevent_independent_writers(tmp_path: Path):
