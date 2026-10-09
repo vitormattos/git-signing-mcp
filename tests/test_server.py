@@ -135,6 +135,49 @@ def test_ambiguous_push_is_reconciled_only_on_error(monkeypatch):
     assert result.structured_content["commit_sha"] == "c" * 40
 
 
+def test_explicit_remote_ref_rejection_is_not_reported_as_ambiguous(monkeypatch):
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    gitops = importlib.import_module("git_signing_mcp.gitops")
+
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "token")
+
+    def remote_rejected(**kwargs):
+        cause = gitops.GitOperationError(
+            code="remote_ref_rejected",
+            operation="push",
+            message="The remote Git server rejected the ref update.",
+            remediation="Inspect remote repository rules.",
+        )
+        raise gitops.PushOutcomeError(cause, "c" * 40)
+
+    def unexpected_lookup(*args):
+        raise AssertionError("definitively rejected push must not require another GitHub call")
+
+    monkeypatch.setattr(server, "create_signed_commit", remote_rejected)
+    monkeypatch.setattr(server.github, "branch_sha", unexpected_lookup)
+
+    request = models.CommitRequest(
+        repository="owner/repo", branch="feature/test", mode="update",
+        expected_head_sha="b" * 40, message="test",
+        changes=[models.FileChange(path="README.md", content="content")],
+    )
+    result = server.create_signed_git_commit(request)
+
+    assert result.is_error is True
+    payload = result.structured_content
+    assert payload["success"] is False
+    assert payload["error_code"] == "remote_ref_rejected"
+    assert payload["phase"] == "push"
+    assert payload["write_outcome"] == "not_applied"
+    assert payload["retry_disposition"] == "refresh_and_replan"
+    assert payload["next_action"] == "reconcile_branch"
+
+
 @pytest.mark.parametrize(
     ("verified", "reason", "wait", "status", "expected_action"),
     [
