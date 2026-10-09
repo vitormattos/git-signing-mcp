@@ -72,3 +72,50 @@ def test_github_token_is_added_only_to_authenticated_git_environment(tmp_path: P
     assert "example-token" not in "".join(base.values())
     assert "example-token" not in "".join(authenticated.values())
     assert authenticated["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+
+
+def test_concurrency_rejection_does_not_consume_write_quota(monkeypatch):
+    from git_signing_mcp.security import WriteAdmissionError, WriteGuard
+
+    guard = WriteGuard(SimpleNamespace(max_writes_per_minute=1, max_concurrent_writes=1))
+    # Simulate a saturated semaphore without a five-second real-world delay.
+    monkeypatch.setattr(guard._semaphore, "acquire", lambda timeout: False)
+    for _ in range(2):
+        with pytest.raises(WriteAdmissionError) as exc:
+            with guard.hold():
+                pass
+        assert exc.value.code == "concurrency_busy"
+    assert len(guard._window) == 0
+
+
+def test_admitted_write_consumes_quota_and_rate_rejection_remains_fast():
+    from git_signing_mcp.security import WriteAdmissionError, WriteGuard
+
+    guard = WriteGuard(SimpleNamespace(max_writes_per_minute=1, max_concurrent_writes=1))
+    with guard.hold():
+        pass
+    with pytest.raises(WriteAdmissionError) as exc:
+        with guard.hold():
+            pass
+    assert exc.value.code == "rate_limited"
+    assert len(guard._window) == 1
+
+
+def test_simultaneous_admission_never_overspends_quota():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from git_signing_mcp.security import WriteAdmissionError, WriteGuard
+
+    guard = WriteGuard(SimpleNamespace(max_writes_per_minute=1, max_concurrent_writes=2))
+    barrier = Barrier(2)
+    def attempt():
+        barrier.wait()
+        try:
+            with guard.hold():
+                return "ok"
+        except WriteAdmissionError as exc:
+            return exc.code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: attempt(), range(2)))
+    assert sorted(results) == ["ok", "rate_limited"]
+    assert len(guard._window) == 1

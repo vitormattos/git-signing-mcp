@@ -94,21 +94,30 @@ class WriteGuard:
         self._lock = threading.Lock()
         self._semaphore = threading.BoundedSemaphore(settings.max_concurrent_writes)
 
+    def _check_quota(self, now: float) -> None:
+        """Call with _lock held, and never spend quota for a rejected admission."""
+        cutoff = now - 60.0
+        while self._window and self._window[0] <= cutoff:
+            self._window.popleft()
+        if len(self._window) >= self._limit:
+            raise WriteAdmissionError("rate_limited")
+
     @contextmanager
     def hold(self) -> Iterator[None]:
-        now = time.monotonic()
+        # Preserve fast rate rejection without charging semaphore timeouts.
         with self._lock:
-            cutoff = now - 60.0
-            while self._window and self._window[0] <= cutoff:
-                self._window.popleft()
-            if len(self._window) >= self._limit:
-                raise WriteAdmissionError("rate_limited")
-            self._window.append(now)
+            self._check_quota(time.monotonic())
 
         acquired = self._semaphore.acquire(timeout=5)
         if not acquired:
             raise WriteAdmissionError("concurrency_busy")
         try:
+            # Recheck under the lock: parallel admissions must never overspend
+            # the per-minute budget after a simultaneous precheck.
+            with self._lock:
+                now = time.monotonic()
+                self._check_quota(now)
+                self._window.append(now)
             yield
         finally:
             self._semaphore.release()
