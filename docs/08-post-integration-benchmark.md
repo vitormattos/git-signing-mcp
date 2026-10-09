@@ -60,11 +60,12 @@ latency nor ChatGPT/tunnel request counts can be derived from these numbers.
 
 ## Live staging acceptance gate
 
-The currently ChatGPT-connected `get_identity` returned
-`tool_schema_version=3`; merged `main` returns `4`. The connected
-service is therefore not verified as running the integrated code. Do not
-interpret this as evidence that new `tools/call` fields or errors are already
-working through ChatGPT.
+The early 2026-10-08 ChatGPT connection exposed schema v3 while `main`
+advertised v4; that initial observation is historical. By 2026-10-09
+the operator confirmed v4 with `server_version=0.1.0` and the correct flat
+successful output schema in the running container. Read-only and stale-HEAD
+checks succeeded; a new confirmed post-upgrade signed write is separately
+required to verify end-to-end success response propagation.
 
 On a **separate, disposable, allowlisted deployment**:
 
@@ -124,9 +125,9 @@ statistically significant evidence for tuning deployment defaults.
 
 ### Admission accounting correctness
 
-The current main still debits `MAX_WRITES_PER_MINUTE` before acquiring the
-five-second write semaphore. Busy requests can therefore consume quota
-without writing. This PR corrects quota accounting **after admission** while
+Before merged PR #45, `MAX_WRITES_PER_MINUTE` was debited before the
+five-second write semaphore, allowing busy requests to consume quota without
+writing. The merged implementation now charges quota **after admission** while
 retaining an early rate-limit check and a second check under the quota lock.
 The tests prove concurrency-busy rejects spend zero quota, accepted requests
 consume one token, and two racing admissions cannot overspend a single token.
@@ -187,3 +188,64 @@ The workflow runner accepts explicit `--harness`, `--original`,
 the original checkout SHA and validates each reported measured SHA and
 whether the integrated CAS code path was used; an invalid observation
 fails the workflow rather than appearing as performance evidence.
+
+## Post-upgrade verification and staged load decision (2026-10-09)
+
+The production bug discovered during PR #50 activity was **post-push output
+serialization**, not a rejected Git operation: GitHub confirmed and verified
+both `9d3fa025781cc80271b89eaf5bc5d13705282d8d` and
+`29e215c8c81367313000b90a4c2c5fac33a1b1fc`, but the old runtime
+still required a nested `result` field. The source regression was fixed in
+PR #49; commits were not retried. The operator subsequently checked the
+running SDK output schema and confirmed root `success` and `commit_sha`
+properties with **no** root `result`, as well as `server_version=0.1.0`.
+Those facts prove corrected tool discovery, **not** a post-upgrade successful
+write, full performance acceptance or deployment revision provenance.
+
+The next check is a single ordinary signed commit with `mode=create`,
+`expected_base_sha` and `wait_for_verification=true` on a dedicated,
+authorized feature branch. Confirm a successful tool result includes the
+commit SHA, `write_outcome=pushed` and `verification_status=verified`
+and independently confirm the GitHub branch ref equals that SHA. Never
+repeat a write solely because the client reports an error after the push.
+
+To confirm the deployed image is the intended release, compare its
+`org.opencontainers.image.revision` OCI label with the merged `main`
+SHA. A semantic Python version or tool-schema version alone cannot prove
+which image is running. If pinned with `MCP_IMAGE=...:sha-<merge-sha>`, wait
+for the GHCR publication job before pulling and force-recreating just
+the MCP service. Rescan ChatGPT tools after upgrading the server.
+
+### Live load is staging-only
+
+**Do not** exercise 1/5/10-agent writes against production or a user's
+personal signing identity. The available GitHub Actions comparisons use
+local disposable Git bare remotes and do not measure actual tunnel,
+OpenBao, GitHub HTTP latency or production tmpfs.
+
+Before the remaining end-to-end #39 acceptance test:
+
+1. Provision an **isolated temporary environment** with separate GitHub
+   sandbox repositories, a disposable signing key, allowlisted feature
+   branch prefixes, separate credential/tunnel and bounded worker count.
+   Record immutable image SHA/digest, tunnel-client version and config,
+   CPU/RAM, rate/concurrency limits, GPG/OpenBao cache TTL and tmpfs size.
+2. Exercise 1, 5 and 10 calls on distinct disposable branches/repositories
+   and controlled shared-branch races. Use complete MCP `tools/call`
+   responses through the staging Secure MCP Tunnel, not just HTTP health
+   checks; verify signatures, DCO, `isError` and `structuredContent`.
+3. Correlate client dispatch/return times and server request IDs; calculate
+   p50/p95, throughput, wait/rejection counts and external GitHub calls;
+   inspect actual container tmpfs bytes and inodes, memory RSS, worktree
+   cleanup and GPG cache growth after each burst.
+4. Distinguish the tunnel inflight gate from server admission
+   (`MAX_CONCURRENT_WRITES`, `MAX_WRITES_PER_MINUTE`). A fast
+   `concurrency_busy`/rate rejection is not a lost Git update.
+5. Capture evidence (date, revision, case, timings, counts, resource
+   measurements) in a release report and compare to the offline matrix;
+   keep any unsupported measurements explicitly `not measured`.
+   Never infer production speedup from noisy runner results.
+
+Without staging deployment/access and those measurements, the live-load
+acceptance remains **blocked** and #39 should remain open. Metadata-only
+changes in #50 cannot satisfy this gate.
