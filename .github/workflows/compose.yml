@@ -23,33 +23,4 @@ jobs:
           OPENAI_TUNNEL_ID: tunnel_0123456789abcdef0123456789abcdef
           GIT_IDENTITY_NAME: CI
           GIT_IDENTITY_EMAIL: ci@example.invalid
-        run: |
-          mkdir -p secrets
-          printf '%s\n' 'dummy-runtime-key' > secrets/openai_tunnel_runtime_api_key
-          printf '%s\n' '0123456789abcdef0123456789abcdef' > secrets/mcp_tunnel_shared_secret
-          printf '%s\n' 'dummy-role-id' > secrets/openbao_role_id
-          printf '%s\n' 'dummy-secret-id' > secrets/openbao_secret_id
-          head -c 32 /dev/zero > secrets/openbao_static_seal_key
-
-          docker compose config --quiet
-          docker compose config --format json > /tmp/compose.json
-
-          python - <<'PY'
-          import json
-
-          with open("/tmp/compose.json", encoding="utf-8") as handle:
-              config = json.load(handle)
-
-          services = config["services"]
-          assert set(services["tunnel-client"]["networks"]) == {"frontend"}
-          assert set(services["mcp"]["networks"]) == {"frontend", "backend"}
-          assert set(services["openbao"]["networks"]) == {"backend"}
-          assert config["networks"]["backend"]["internal"] is True
-
-          for name in ("mcp", "tunnel-client", "openbao"):
-              assert not services[name].get("ports"), f"{name} publishes host ports"
-          PY
-
-          grep -qx 'secrets' .dockerignore
-          grep -qx 'secrets-local' .dockerignore
-          grep -qx 'volumes' .dockerignore
+        run: python scripts/check_compose.py

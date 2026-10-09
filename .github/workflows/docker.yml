@@ -42,10 +42,7 @@ jobs:
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
 
       - name: Smoke test image
-        run: |
-          docker run --rm --entrypoint python git-signing-mcp:test -c \
-            "import git_signing_mcp, httpx, mcp, pydantic, starlette, uvicorn"
-          test "$(docker run --rm --entrypoint id git-signing-mcp:test -u)" = "10001"
+        run: python scripts/smoke_image.py git-signing-mcp:test
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
