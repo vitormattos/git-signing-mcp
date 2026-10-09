@@ -206,7 +206,7 @@ def _failure(
 )
 def create_signed_git_commit(
     request: CommitRequest,
-) -> Annotated[CallToolResult, CommitResult | CommitFailure]:
+) -> Annotated[CallToolResult, CommitResult]:
     """Write a signed commit using explicit branch intent and checked Git HEAD.
 
     Use mode=create with expected_base_sha for a missing target; use mode=update

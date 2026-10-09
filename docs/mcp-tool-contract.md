@@ -49,3 +49,19 @@ Validate on deployment through Streamable HTTP initialization, tools/list,
 tools/call (successful and failing calls), and a private tunnel smoke test.
 Never run a production signing test solely to probe credentials or bypass
 repository allowlists.
+
+## SDK result-shape invariant (post-push serialization regression)
+
+`create_signed_git_commit` returns the **flat** `CommitResult` object for a
+successful write. Its `outputSchema` must describe the same flat object with
+`success` and `commit_sha` fields, **without** an extra `result` wrapper.
+The MCP Python SDK wraps generic union return annotations as `{"result": ...}`;
+therefore annotate the native `CallToolResult` with the successful Pydantic
+model, not `CommitResult | CommitFailure`. Operational failures remain
+`isError=true` with a sanitized `CommitFailure`, and the SDK does not apply
+successful-output validation to error results.
+
+A transport-level **successful** `tools/call` regression test is mandatory.
+Testing only failure results misses post-push SDK validation failures that can
+cause a commit to succeed at GitHub while the model receives an error. The
+agent must inspect the remote before retrying an ambiguous tool error.
