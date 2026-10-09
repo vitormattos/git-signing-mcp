@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 LibreCode coop and contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Offline signed Git benchmark
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/benchmark_signed_commits.py'
+      - 'tests/test_benchmark_signed_commits.py'
+      - 'src/git_signing_mcp/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout comparison harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Checkout original revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: original
+          ref: 555f0066c435a1f2648c0b7e93277358c30ae9bf
+          persist-credentials: false
+      - name: Checkout integrated revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: integrated
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Python setup
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install harness requirements
+        run: python -m pip install -e "./harness[dev]"
+      - name: Compare on identical disposable local remotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/signed-git-bench"
+          for revision in original integrated; do
+            export PYTHONPATH="$GITHUB_WORKSPACE/$revision/src"
+            for profile in serial separated contended patch; do
+              case "$profile" in
+                serial) writes=1; repos=same; payload=small; mode=files ;;
+                separated) writes=5; repos=separate; payload=small; mode=files ;;
+                contended) writes=5; repos=same; payload=small; mode=files ;;
+                patch) writes=5; repos=separate; payload=medium; mode=patch ;;
+              esac
+              python harness/scripts/benchmark_signed_commits.py \
+                --agents 1 5 10 --rounds 2 \
+                --max-concurrent-writes "$writes" \
+                --max-writes-per-minute 600 \
+                --repositories "$repos" --size "$payload" --mode "$mode" \
+                --root "$RUNNER_TEMP/signed-git-bench" \
+                --output "$RUNNER_TEMP/$revision-$profile.json"
+            done
+          done
+          python - <<'PY'
+          import glob
+          import json
+          import os
+          for filename in sorted(glob.glob(os.environ["RUNNER_TEMP"] + "/original-*.json")
+                                 + glob.glob(os.environ["RUNNER_TEMP"] + "/integrated-*.json")):
+              with open(filename, encoding="utf-8") as f:
+                  report = json.load(f)
+              print("BENCHMARK_JSON " + json.dumps({
+                  "profile": os.path.basename(filename),
+                  "measured_sha": report["measured_checkout_revision"],
+                  "cas": report["environment"]["active_compare_and_swap_mode"],
+                  "peak_bytes": report["footprint"]["sampled_peak"]["bytes"],
+                  "peak_inodes": report["footprint"]["sampled_peak"]["inodes"],
+                  "max_rss_kib": report["footprint"]["process_max_rss_kib_linux"],
+                  "runs": [{"agents": s["agents"], **s["all"]} for s in report["scenarios"]],
+              }, sort_keys=True))
+          PY
+      - name: Upload reproducible raw observations
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-signed-git-comparison
+          path: ${{ runner.temp }}/*-*.json
+          retention-days: 14
