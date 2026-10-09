@@ -54,6 +54,8 @@ def test_create_signed_commit_returns_actionable_git_failure(monkeypatch):
     request = models.CommitRequest(
         repository="LibreSign/libresign",
         branch="feature/test",
+        mode="update",
+        expected_head_sha="a" * 40,
         message="test: exercise actionable push failure",
         changes=[models.FileChange(path="README.md", content="test")],
     )

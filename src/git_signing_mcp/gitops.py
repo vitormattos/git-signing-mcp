@@ -43,6 +43,16 @@ class GitOperationError(RuntimeError):
         self.remediation = remediation
 
 
+class BranchPreconditionError(GitOperationError):
+    def __init__(self, code: str, observed_sha: str | None) -> None:
+        super().__init__(
+            code=code, operation="fetch",
+            message="Branch precondition is not satisfied.",
+            remediation="Re-evaluate the remote branch and choose the correct operation.",
+        )
+        self.observed_sha = observed_sha
+
+
 def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
     operation = next((arg for arg in args[1:] if not arg.startswith("-")), Path(args[0]).name)
     detail = _redact(stderr).lower()
@@ -94,6 +104,18 @@ def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
                 "Use an allowed feature branch or satisfy the repository rules before retrying. "
                 "Do not bypass branch protection from the MCP."
             ),
+        )
+
+    if "stale info" in detail and operation == "push":
+        is_create = any(
+            arg.startswith("--force-with-lease=refs/heads/") and arg.endswith(":")
+            for arg in args
+        )
+        return GitOperationError(
+            code="target_branch_exists" if is_create else "target_head_mismatch",
+            operation=operation,
+            message="Remote branch precondition was rejected at push.",
+            remediation="Refresh the destination branch and reconcile before another write.",
         )
 
     if "non-fast-forward" in detail or ("[rejected]" in detail and "fetch first" in detail):
@@ -255,7 +277,8 @@ class RepositoryCache:
 
     def _path_for(self, repository: str) -> Path:
         digest = hashlib.sha256(repository.encode()).hexdigest()[:20]
-        return self.root / f"{digest}.git"
+        # Prevent independent server processes from mutating one bare Git cache.
+        return self.root / str(os.getpid()) / f"{digest}.git"
 
     @contextmanager
     def worktree(
@@ -268,12 +291,14 @@ class RepositoryCache:
         destination: Path,
         env: dict[str, str],
         auth_env: dict[str, str],
+        mode: str | None = None,
+        expected_base_sha: str | None = None,
     ) -> Iterator[Path]:
         cache = self._path_for(repository)
         lock = self._lock_for(repository)
         with lock:
             if not cache.exists():
-                cache.mkdir(mode=0o700)
+                cache.mkdir(mode=0o700, parents=True)
                 _run(["git", "init", "--quiet", "--bare"], cache, env)
                 _run(
                     ["git", "remote", "add", "origin", f"https://github.com/{repository}.git"],
@@ -281,7 +306,24 @@ class RepositoryCache:
                     env,
                 )
             branch_exists = _fetch_remote_branch(cache, branch, auth_env)
-            if branch_exists:
+            if mode == "create":
+                if branch_exists:
+                    raise BranchPreconditionError(
+                        "target_branch_exists",
+                        _run(["git", "rev-parse", "__mcp_source"], cache, env),
+                    )
+                if not _fetch_remote_branch(cache, base_branch, auth_env):
+                    raise BranchPreconditionError("base_branch_missing", None)
+                base_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
+                if base_sha != expected_base_sha:
+                    raise BranchPreconditionError("base_head_mismatch", base_sha)
+            elif mode == "update":
+                if not branch_exists:
+                    raise BranchPreconditionError("target_branch_missing", None)
+                source_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
+                if source_sha != expected_head_sha:
+                    raise BranchPreconditionError("target_head_mismatch", source_sha)
+            elif branch_exists:
                 source_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
                 if expected_head_sha is not None and source_sha != expected_head_sha:
                     raise ValueError("branch HEAD changed; refresh before writing")
@@ -515,6 +557,8 @@ def create_signed_commit(
     base_branch: str,
     expected_head_sha: str | None,
     changes: list[FileChange],
+    mode: str | None = None,
+    expected_base_sha: str | None = None,
     patch: str | None,
     message: str,
     repository_cache: RepositoryCache,
@@ -535,6 +579,8 @@ def create_signed_commit(
             branch=branch,
             base_branch=base_branch,
             expected_head_sha=expected_head_sha,
+            mode=mode,
+            expected_base_sha=expected_base_sha,
             destination=destination,
             env=env,
             auth_env=git_auth_env,
@@ -579,9 +625,24 @@ def create_signed_commit(
             if "\ngpgsig " not in f"\n{raw_commit}":
                 raise RuntimeError("Git produced an unsigned commit")
 
-            _run(
-                ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"],
-                repo,
-                git_auth_env,
-            )
+            if mode in {"create", "update"}:
+                # Exact remote lease is enforced by receive-pack, not by a local lock.
+                # The candidate has the checked-out expected head as its direct parent.
+                parent = _run(["git", "rev-parse", "HEAD^"], repo, env)
+                expected = expected_base_sha if mode == "create" else expected_head_sha
+                if parent != expected:
+                    raise GitOperationError(
+                        code="candidate_not_fast_forward", operation="push",
+                        message="Candidate commit is not based on the reviewed HEAD.",
+                        remediation="Recreate the commit from the expected branch HEAD.",
+                    )
+                lease = "" if mode == "create" else expected_head_sha
+                push_args = [
+                    "git", "push", "--quiet",
+                    f"--force-with-lease=refs/heads/{branch}:{lease}",
+                    "origin", f"HEAD:refs/heads/{branch}",
+                ]
+            else:
+                push_args = ["git", "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"]
+            _run(push_args, repo, git_auth_env)
             return commit_sha

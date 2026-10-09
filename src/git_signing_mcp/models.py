@@ -29,13 +29,17 @@ class FileChange(BaseModel):
 class CommitRequest(BaseModel):
     repository: str = Field(description="GitHub repository in owner/name form.")
     branch: str = Field(description="Target branch to create or update.")
-    base_branch: str = Field(
-        default="main",
-        description="Base branch used only when the target branch does not exist.",
+    mode: Literal["create", "update"] = Field(
+        description="Required intent: create a new branch or update an existing branch."
+    )
+    base_branch: str = Field(default="main", description="Base for create mode.")
+    expected_base_sha: str | None = Field(
+        default=None,
+        description="Required base HEAD SHA for create mode; pins the reviewed base.",
     )
     expected_head_sha: str | None = Field(
         default=None,
-        description="Optional optimistic-lock SHA. The write is rejected if branch HEAD differs.",
+        description="Required current target HEAD SHA for update mode.",
     )
     message: str = Field(min_length=1, max_length=4096)
     changes: list[FileChange] = Field(default_factory=list, max_length=1000)
@@ -60,6 +64,11 @@ class CommitRequest(BaseModel):
         has_patch = self.patch is not None and self.patch != ""
         if has_changes == has_patch:
             raise ValueError("provide exactly one of changes or patch")
+        if self.mode == "create":
+            if self.expected_base_sha is None or self.expected_head_sha is not None:
+                raise ValueError("create requires expected_base_sha and prohibits expected_head_sha")
+        elif self.expected_head_sha is None or self.expected_base_sha is not None:
+            raise ValueError("update requires expected_head_sha and prohibits expected_base_sha")
         return self
 
 

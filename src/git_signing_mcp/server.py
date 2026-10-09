@@ -20,7 +20,10 @@ from starlette.responses import JSONResponse
 from .auth import TunnelAccessMiddleware
 from .config import Settings
 from .github import GitHubClient
-from .gitops import GitOperationError, OpenPGPKeyCache, RepositoryCache, create_signed_commit
+from .gitops import (
+    BranchPreconditionError, GitOperationError, OpenPGPKeyCache,
+    RepositoryCache, create_signed_commit,
+)
 from .models import CommitFailure, CommitRequest, CommitResult, VerificationResult
 from .secrets import SecretResolver
 from .security import (
@@ -204,9 +207,10 @@ def _failure(
 def create_signed_git_commit(
     request: CommitRequest,
 ) -> Annotated[CallToolResult, CommitResult | CommitFailure]:
-    """Create or update a GPG/DCO-signed Git commit on an authorized branch.
+    """Write a signed commit using explicit branch intent and checked Git HEAD.
 
-    Treat a stale target HEAD as a conflict requiring reconciliation. An unknown
+    Use mode=create with expected_base_sha for a missing target; use mode=update
+    with expected_head_sha for an existing target. Never retry stale writes blindly. An unknown
     push outcome requires remote inspection, never a blind retry. This tool does
     not resolve code conflicts, merge PRs or monitor CI.
     """
@@ -240,6 +244,8 @@ def create_signed_git_commit(
                 branch=request.branch,
                 base_branch=request.base_branch,
                 expected_head_sha=request.expected_head_sha,
+                mode=request.mode,
+                expected_base_sha=request.expected_base_sha,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,
@@ -276,6 +282,15 @@ def create_signed_git_commit(
             )
         )
     except GitOperationError as exc:
+        if isinstance(exc, BranchPreconditionError):
+            return _failure(
+                request, request_id, code=exc.code, phase="fetch",
+                message="Branch precondition is not satisfied.",
+                next_action="create_branch_explicitly" if exc.code == "target_branch_missing"
+                else "reconcile_branch",
+                disposition="refresh_and_replan",
+                observed_sha=exc.observed_sha,
+            )
         push = exc.operation == "push"
         operation_phase = (
             "push" if push else "fetch" if exc.operation in {"fetch", "remote"}
