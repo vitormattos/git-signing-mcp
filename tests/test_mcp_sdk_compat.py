@@ -52,6 +52,10 @@ def test_native_mcp_output_schema_and_result_contract(monkeypatch):
         result = await server.mcp.call_tool("get_identity", {})
         assert isinstance(result, CallToolResult)
         assert result.structured_content is not None
+        from git_signing_mcp import __version__
+
+        assert result.structured_content["server_version"] == __version__
+        assert result.structured_content["tool_schema_version"] == "4"
 
     anyio.run(exercise)
 
