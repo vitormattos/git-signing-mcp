@@ -21,7 +21,7 @@ from .auth import TunnelAccessMiddleware
 from .config import Settings
 from .github import GitHubClient
 from .gitops import (
-    BranchPreconditionError, GitOperationError, OpenPGPKeyCache,
+    BranchPreconditionError, GitOperationError, PushOutcomeError, OpenPGPKeyCache,
     RepositoryCache, create_signed_commit,
 )
 from .models import CommitFailure, CommitRequest, CommitResult, VerificationResult
@@ -246,6 +246,7 @@ def create_signed_git_commit(
                 expected_head_sha=request.expected_head_sha,
                 mode=request.mode,
                 expected_base_sha=request.expected_base_sha,
+                request_id=request_id,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,
@@ -254,9 +255,18 @@ def create_signed_git_commit(
             )
 
         phase = "verification"
-        verified, reason, attempts = _verification_after_push(
-            request.repository, commit_sha, request.wait_for_verification
-        )
+        try:
+            verified, reason, attempts = _verification_after_push(
+                request.repository, commit_sha, request.wait_for_verification
+            )
+            verification_status = (
+                "not_requested" if not request.wait_for_verification
+                else "verified" if verified else "unverified"
+            )
+        except Exception:
+            # Push has already returned success. Verification is a distinct read.
+            verified, reason, attempts = False, "unavailable", 0
+            verification_status = "unavailable"
         audit(
             "commit.completed",
             request_id=request_id,
@@ -279,7 +289,54 @@ def create_signed_git_commit(
                 dco_signed_off_by=f"{settings.git_identity_name} <{settings.git_identity_email}>",
                 cryptographic_verification=verified,
                 verification_reason=reason,
+                verification_status=verification_status,
+                next_action="verify_commit" if verification_status == "unavailable"
+                else "none",
             )
+        )
+    except PushOutcomeError as exc:
+        # A lost push response does not prove the remote ref was unchanged.
+        if not exc.definitively_rejected:
+            try:
+                current_sha = github.branch_sha(request.repository, request.branch)
+            except Exception:
+                current_sha = None
+            if current_sha == exc.commit_sha:
+                audit(
+                    "commit.push_reconciled", request_id=request_id,
+                    repository=request.repository, branch=request.branch,
+                    commit_sha=exc.commit_sha, write_outcome="pushed",
+                )
+                return _tool_result(
+                    CommitResult(
+                        repository=request.repository, branch=request.branch,
+                        commit_sha=exc.commit_sha,
+                        commit_url=(
+                            f"https://github.com/{request.repository}/commit/{exc.commit_sha}"
+                        ),
+                        author_name=settings.git_identity_name,
+                        author_email=settings.git_identity_email,
+                        dco_signed_off_by=(
+                            f"{settings.git_identity_name} <{settings.git_identity_email}>"
+                        ),
+                        cryptographic_verification=False,
+                        verification_reason="not_checked",
+                        verification_status="not_requested",
+                        next_action="verify_commit",
+                    )
+                )
+        return _failure(
+            request, request_id, code=exc.code if exc.definitively_rejected
+            else "unknown_write_outcome",
+            phase="push",
+            message="Remote push was rejected." if exc.definitively_rejected
+            else "The remote outcome of the signed push could not be confirmed.",
+            next_action="reconcile_branch" if exc.definitively_rejected
+            else "inspect_remote",
+            disposition="refresh_and_replan" if exc.definitively_rejected
+            else "inspect_before_retry",
+            operation="push",
+            write_outcome="not_applied" if exc.definitively_rejected else "unknown",
         )
     except GitOperationError as exc:
         if isinstance(exc, BranchPreconditionError):
