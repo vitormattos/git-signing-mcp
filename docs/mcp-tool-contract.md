@@ -22,10 +22,19 @@ Typical agent actions:
 | Error | Action |
 | --- | --- |
 | `target_head_mismatch` | Refresh and reconcile the branch before writing |
+| `patch_does_not_apply` | Read the checked-out files, rebuild the patch for that exact HEAD, and submit a new request |
 | `branch_policy_denied` / `repository_not_allowed` | Correct authorization or choose an allowed branch |
 | `rate_limited` / `concurrency_busy` | Retry later, without assuming a fixed delay |
 | `github_write_forbidden` | Correct repository write permission; inspect remote after a push attempt |
 | `unknown_write_outcome` | Inspect the destination branch; never create a follow-up commit blindly |
+
+A rejected `git apply --check` with conflicting patch context returns
+`error_code=patch_does_not_apply`, `phase=apply`, `write_outcome=not_applied`,
+`retry_disposition=fix_request` and `next_action=correct_request`.
+The message may name up to three conservatively sanitized repository paths;
+it never includes the patch body or raw Git stderr. The `remediation` field
+explains the correction instead of duplicating `message`. Matching a branch
+precondition does not guarantee that an independently generated patch applies.
 
 The server logs a `request_id` via structured `commit.requested`,
 `commit.rejected` and `commit.completed` audit events. Operators can filter

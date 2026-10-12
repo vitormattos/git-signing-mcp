@@ -102,6 +102,62 @@ def test_apply_patch_checks_then_applies(monkeypatch, tmp_path: Path):
     assert calls[1][0] == ["git", "apply", "-"]
 
 
+def test_patch_conflict_error_identifies_paths_and_remediation():
+    stderr = (
+        "error: patch failed: Support/InvoiceFederalPayloadResolver.php:113\n"
+        "error: Support/InvoiceFederalPayloadResolver.php: patch does not apply\n"
+        "error: patch failed: tests/Unit/Http/Controllers/InvoiceControllerTest.php:4828\n"
+        "error: tests/Unit/Http/Controllers/InvoiceControllerTest.php: patch does not apply\n"
+    )
+    result = gitops._classify_git_failure(["git", "apply", "--check", "-"], stderr)
+
+    assert result.code == "patch_does_not_apply"
+    assert result.operation == "apply"
+    assert result.args[0].count("Support/InvoiceFederalPayloadResolver.php") == 1
+    assert "tests/Unit/Http/Controllers/InvoiceControllerTest.php" in str(result)
+    assert "regenerate the patch" in result.remediation
+    assert "force-apply" in result.remediation
+
+
+def test_patch_conflict_omits_unsafe_and_sensitive_paths():
+    stderr = (
+        "error: patch failed: ../../escape.py:1\n"
+        "error: patch failed: github_pat_secretvalue:2\n"
+        "error: safe/file.py: patch does not apply\n"
+    )
+    result = gitops._classify_git_failure(["git", "apply", "--check", "-"], stderr)
+
+    assert result.code == "patch_does_not_apply"
+    assert "safe/file.py" in str(result)
+    assert "../../escape.py" not in str(result)
+    assert "github_pat_secretvalue" not in str(result)
+    assert "github_pat_secretvalue" not in result.remediation
+
+
+def test_patch_check_failure_does_not_change_worktree(tmp_path: Path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    target = repo / "README.md"
+    target.write_text("current\n", encoding="utf-8")
+    patch = (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    settings = SimpleNamespace(max_patch_bytes=1024, max_changes=10)
+
+    with pytest.raises(gitops.GitOperationError) as exc_info:
+        gitops._apply_patch(repo, {"PATH": "/usr/bin:/bin"}, patch, settings)
+
+    assert exc_info.value.code == "patch_does_not_apply"
+    assert target.read_text(encoding="utf-8") == "current\n"
+
+
 def test_run_redacts_token_and_commit_message(monkeypatch, tmp_path: Path, caplog):
     class Result:
         returncode = 1

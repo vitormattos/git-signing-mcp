@@ -39,6 +39,11 @@ _REMOTE_REF_REJECTED_RE = re.compile(
 )
 
 
+_PATCH_HUNK_RE = re.compile(r"error: patch failed: (.+):[0-9]+")
+_PATCH_NOT_APPLIED_RE = re.compile(r"error: (.+): patch does not apply")
+_SAFE_PATCH_PATH_RE = re.compile(r"[A-Za-z0-9_./+-]{1,100}")
+
+
 class GitOperationError(RuntimeError):
     """A sanitized, caller-actionable Git failure."""
 
@@ -75,9 +80,43 @@ class BranchPreconditionError(GitOperationError):
         self.observed_sha = observed_sha
 
 
+def _conflicting_patch_paths(stderr: str) -> list[str]:
+    """Expose only bounded, simple relative paths; never raw Git stderr."""
+    paths: list[str] = []
+    for line in _redact(stderr).splitlines():
+        match = _PATCH_HUNK_RE.fullmatch(line) or _PATCH_NOT_APPLIED_RE.fullmatch(line)
+        if match is None:
+            continue
+        path = match.group(1)
+        if not _SAFE_PATCH_PATH_RE.fullmatch(path):
+            continue
+        if any(segment in {"", ".", "..", ".git"} for segment in path.split("/")):
+            continue
+        if path not in paths:
+            paths.append(path)
+        if len(paths) >= 3:
+            break
+    return paths
+
+
 def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
     operation = next((arg for arg in args[1:] if not arg.startswith("-")), Path(args[0]).name)
     detail = _redact(stderr).lower()
+
+    if operation == "apply" and (
+        "patch failed:" in detail or "patch does not apply" in detail
+    ):
+        paths = _conflicting_patch_paths(stderr)
+        affected = f" Conflicting paths: {', '.join(paths)}." if paths else ""
+        return GitOperationError(
+            code="patch_does_not_apply",
+            operation="apply",
+            message="The patch does not match the checked-out commit." + affected,
+            remediation=(
+                "Read the files at the checked-out branch HEAD and regenerate the patch "
+                "against those exact versions. Do not retry the unchanged patch or force-apply it."
+            ),
+        )
 
     if (
         "permission to " in detail
