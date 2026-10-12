@@ -147,6 +147,10 @@ Current error codes include:
   the push.
 - `branch_head_changed`: the branch moved before the push; refresh HEAD and
   retry with `expected_head_sha`.
+- `patch_does_not_apply`: the patch's context does not match the checked-out
+  branch HEAD. Regenerate it from the current file contents; do not force
+  application. Returns `phase=apply`, `write_outcome=not_applied` and
+  `next_action=correct_request`.
 - `git_operation_failed`: an unclassified Git failure; use the returned
   `request_id` to correlate with the server audit log.
 

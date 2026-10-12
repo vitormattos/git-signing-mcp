@@ -76,6 +76,50 @@ def test_create_signed_commit_returns_actionable_git_failure(monkeypatch):
     assert "github-token" not in str(payload)
 
 
+def test_patch_conflict_response_is_actionable_and_confirmed_not_applied(monkeypatch):
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    gitops = importlib.import_module("git_signing_mcp.gitops")
+
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "github_pat_secretvalue")
+
+    def fail_apply(**kwargs):
+        raise gitops._classify_git_failure(
+            ["git", "apply", "--check", "-"],
+            "error: patch failed: Support/InvoiceFederalPayloadResolver.php:113\n"
+            "error: Support/InvoiceFederalPayloadResolver.php: patch does not apply\n",
+        )
+
+    monkeypatch.setattr(server, "create_signed_commit", fail_apply)
+    request = models.CommitRequest(
+        repository="owner/repo",
+        branch="fix/test-apply",
+        mode="create",
+        expected_base_sha="a" * 40,
+        message="test: patch mismatch",
+        patch="outdated patch",
+    )
+
+    response = server.create_signed_git_commit(request)
+    payload = response.structured_content
+
+    assert response.is_error is True
+    assert payload["error_code"] == "patch_does_not_apply"
+    assert payload["operation"] == payload["phase"] == "apply"
+    assert payload["write_outcome"] == "not_applied"
+    assert payload["retry_disposition"] == "fix_request"
+    assert payload["next_action"] == "correct_request"
+    assert "InvoiceFederalPayloadResolver.php" in payload["message"]
+    assert "regenerate the patch" in payload["remediation"]
+    assert payload["message"] != payload["remediation"]
+    assert "private-key" not in str(payload)
+    assert "github_pat_secretvalue" not in str(payload)
+
+
 def test_successful_push_verification_outage_still_returns_sha(monkeypatch):
     import importlib
 

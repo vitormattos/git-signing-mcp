@@ -183,6 +183,7 @@ def _failure(
     operation: str = "commit",
     write_outcome: str = "not_applied",
     observed_sha: str | None = None,
+    remediation: str | None = None,
 ) -> CallToolResult:
     audit(
         "commit.rejected",
@@ -205,7 +206,7 @@ def _failure(
             next_action=next_action,
             operation=operation,
             message=message,
-            remediation=message,
+            remediation=remediation if remediation is not None else message,
             expected_head_sha=request.expected_head_sha,
             observed_head_sha=observed_sha,
         ),
@@ -367,27 +368,31 @@ def create_signed_git_commit(
                 observed_sha=exc.observed_sha,
             )
         push = exc.operation == "push"
+        patch_conflict = exc.operation == "apply" and exc.code == "patch_does_not_apply"
         operation_phase = (
             "push" if push else "fetch" if exc.operation in {"fetch", "remote"}
+            else "apply" if exc.operation == "apply"
             else "signing" if exc.operation in {"commit", "gpg"}
             else "worktree" if exc.operation == "worktree"
             else phase
         )
         action = (
-            "inspect_remote" if push
+            "correct_request" if patch_conflict
+            else "inspect_remote" if push
             else "reconcile_branch" if exc.code == "branch_head_changed"
             else "contact_operator"
         )
         disposition = (
-            "inspect_before_retry" if push else
-            "refresh_and_replan" if exc.code == "branch_head_changed"
+            "fix_request" if patch_conflict
+            else "inspect_before_retry" if push
+            else "refresh_and_replan" if exc.code == "branch_head_changed"
             else "operator_action"
         )
         return _failure(
             request, request_id, code=exc.code,
             phase=operation_phase, message=str(exc)[:240],
             next_action=action, disposition=disposition,
-            operation=exc.operation,
+            operation=exc.operation, remediation=exc.remediation,
             write_outcome="unknown" if push else "not_applied",
         )
     except WriteAdmissionError as exc:
