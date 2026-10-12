@@ -7,6 +7,19 @@ import importlib
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_write_guard(monkeypatch):
+    """Keep mocked server writes from consuming another test's admission quota."""
+    monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
+    monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
+    monkeypatch.setenv(
+        "GIT_IDENTITY_EMAIL",
+        "1079143+vitormattos@users.noreply.github.com",
+    )
+    server = importlib.import_module("git_signing_mcp.server")
+    monkeypatch.setattr(server, "write_guard", server.WriteGuard(server.settings))
+
+
 def test_verification_after_push_skips_lookup_when_disabled(monkeypatch):
     monkeypatch.setenv("MCP_TUNNEL_SHARED_SECRET", "x" * 32)
     monkeypatch.setenv("GIT_IDENTITY_NAME", "Vitor Mattos")
