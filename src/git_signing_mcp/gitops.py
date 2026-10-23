@@ -104,7 +104,10 @@ def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
     detail = _redact(stderr).lower()
 
     if operation == "apply" and (
-        "patch failed:" in detail or "patch does not apply" in detail
+        "patch failed:" in detail
+        or "patch does not apply" in detail
+        or "does not exist in index" in detail
+        or "does not match index" in detail
     ):
         paths = _conflicting_patch_paths(stderr)
         affected = f" Conflicting paths: {', '.join(paths)}." if paths else ""
@@ -607,15 +610,37 @@ def _apply_patch(repo: Path, env: dict[str, str], patch: str, settings: Settings
     if "\x00" in patch:
         raise ValueError("patch must be UTF-8 text without NUL bytes")
 
-    _run(["git", "apply", "--check", "-"], repo, env, input_text=patch)
-    _run(["git", "apply", "-"], repo, env, input_text=patch)
+    # Apply to the index as well as the worktree. A submodule bump updates a
+    # gitlink (mode 160000), not an ordinary file in the worktree.
+    _run(["git", "apply", "--index", "--check", "-"], repo, env, input_text=patch)
+    _run(["git", "apply", "--index", "-"], repo, env, input_text=patch)
 
-    changed = _run(["git", "diff", "--name-only", "-z", "--no-renames", "HEAD"], repo, env)
+    changed = _run(
+        ["git", "diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD"],
+        repo, env,
+    )
     paths = [path for path in changed.split("\x00") if path]
     if len(paths) > settings.max_changes:
         raise ValueError(f"patch changes too many files; maximum is {settings.max_changes}")
     for path in paths:
         validate_change_path(repo, path)
+
+    # Never let a text patch create, remove or replace a submodule. Support only
+    # updating the SHA of an already tracked gitlink.
+    raw = _run(
+        ["git", "diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "HEAD"],
+        repo, env,
+    )
+    fields = [field for field in raw.split("\x00") if field]
+    for metadata, path in zip(fields[::2], fields[1::2], strict=True):
+        parts = metadata.split()
+        if len(parts) < 5:
+            raise ValueError("invalid staged diff metadata")
+        old_mode, new_mode = parts[0].removeprefix(":"), parts[1]
+        if "160000" in {old_mode, new_mode}:
+            if old_mode != "160000" or new_mode != "160000":
+                raise ValueError("patch may only update existing gitlinks")
+            validate_change_path(repo, path)
 
 
 def create_signed_commit(

@@ -98,8 +98,64 @@ def test_apply_patch_checks_then_applies(monkeypatch, tmp_path: Path):
     settings = SimpleNamespace(max_patch_bytes=1024, max_changes=10)
     gitops._apply_patch(tmp_path, {}, "diff --git a/README.md b/README.md\n", settings)
 
-    assert calls[0][0] == ["git", "apply", "--check", "-"]
-    assert calls[1][0] == ["git", "apply", "-"]
+    assert calls[0][0] == ["git", "apply", "--index", "--check", "-"]
+    assert calls[1][0] == ["git", "apply", "--index", "-"]
+
+
+def test_gitlink_patch_updates_only_the_existing_submodule_sha(tmp_path: Path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    old_sha = "1" * 40
+    new_sha = "2" * 40
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--add", "--cacheinfo",
+         f"160000,{old_sha},3rdparty"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "commit", "--quiet", "-m", "seed"], check=True)
+    patch = (
+        "diff --git a/3rdparty b/3rdparty\n"
+        "index 1111111..2222222 160000\n"
+        "--- a/3rdparty\n"
+        "+++ b/3rdparty\n"
+        "@@ -1 +1 @@\n"
+        f"-Subproject commit {old_sha}\n"
+        f"+Subproject commit {new_sha}\n"
+    )
+    settings = SimpleNamespace(max_patch_bytes=1024, max_changes=10)
+    gitops._apply_patch(repo, {"PATH": "/usr/bin:/bin"}, patch, settings)
+    subprocess.run(["git", "-C", str(repo), "add", "--all"], check=True)
+    result = subprocess.check_output(
+        ["git", "-C", str(repo), "ls-files", "--stage", "--", "3rdparty"], text=True,
+    )
+    assert result.startswith(f"160000 {new_sha} 0\t3rdparty")
+
+
+def test_gitlink_patch_rejects_creating_a_new_submodule(tmp_path: Path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--quiet", "--allow-empty", "-m", "seed"], check=True)
+    target_sha = "2" * 40
+    patch = (
+        "diff --git a/untrusted b/untrusted\n"
+        "new file mode 160000\n"
+        "index 0000000..2222222\n"
+        "--- /dev/null\n"
+        "+++ b/untrusted\n"
+        "@@ -0,0 +1 @@\n"
+        f"+Subproject commit {target_sha}\n"
+    )
+    settings = SimpleNamespace(max_patch_bytes=1024, max_changes=10)
+    with pytest.raises(ValueError, match="only update existing gitlinks"):
+        gitops._apply_patch(repo, {"PATH": "/usr/bin:/bin"}, patch, settings)
 
 
 def test_patch_conflict_error_identifies_paths_and_remediation():
@@ -141,6 +197,10 @@ def test_patch_check_failure_does_not_change_worktree(tmp_path: Path):
     subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
     target = repo / "README.md"
     target.write_text("current\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--quiet", "-m", "seed"], check=True)
     patch = (
         "diff --git a/README.md b/README.md\n"
         "--- a/README.md\n"
