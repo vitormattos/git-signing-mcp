@@ -28,7 +28,13 @@ Typical agent actions:
 | `github_write_forbidden` | Correct repository write permission; inspect remote after a push attempt |
 | `unknown_write_outcome` | Inspect the destination branch; never create a follow-up commit blindly |
 
-A rejected `git apply --check` with conflicting patch context returns
+Patches are checked and applied with `git apply --index`. This permits a
+SHA-only change to an existing Git submodule (gitlink mode `160000`) while
+preserving the original commit-signing workflow. A patch cannot create, delete
+or replace a gitlink; only a SHA update of a previously tracked submodule is
+accepted.
+
+A rejected `git apply --index --check` with conflicting patch context returns
 `error_code=patch_does_not_apply`, `phase=apply`, `write_outcome=not_applied`,
 `retry_disposition=fix_request` and `next_action=correct_request`.
 The message may name up to three conservatively sanitized repository paths;
