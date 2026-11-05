@@ -133,6 +133,48 @@ def test_patch_conflict_response_is_actionable_and_confirmed_not_applied(monkeyp
     assert "github_pat_secretvalue" not in str(payload)
 
 
+def test_malformed_patch_response_requests_a_corrected_diff(monkeypatch):
+    server = importlib.import_module("git_signing_mcp.server")
+    models = importlib.import_module("git_signing_mcp.models")
+    gitops = importlib.import_module("git_signing_mcp.gitops")
+
+    monkeypatch.setattr(server.github, "validate_repository", lambda repository: None)
+    monkeypatch.setattr(server, "validate_branch_policy", lambda *args: None)
+    monkeypatch.setattr(server, "validate_branch_name", lambda *args: None)
+    monkeypatch.setattr(server.secrets, "signing_material", lambda: ("private-key", None))
+    monkeypatch.setattr(server.secrets, "github_token", lambda: "synthetic-token")
+
+    def fail_apply(**kwargs):
+        raise gitops._classify_git_failure(
+            ["git", "apply", "--index", "--check", "-"],
+            "error: corrupt patch at line 9\n",
+        )
+
+    monkeypatch.setattr(server, "create_signed_commit", fail_apply)
+    request = models.CommitRequest(
+        repository="owner/repo",
+        branch="fix/malformed-patch",
+        mode="create",
+        expected_base_sha="a" * 40,
+        message="test: malformed patch diagnostics",
+        patch="invalid diff",
+    )
+
+    response = server.create_signed_git_commit(request)
+    payload = response.structured_content
+
+    assert response.is_error is True
+    assert payload["error_code"] == "patch_invalid_format"
+    assert payload["phase"] == payload["operation"] == "apply"
+    assert payload["write_outcome"] == "not_applied"
+    assert payload["retry_disposition"] == "fix_request"
+    assert payload["next_action"] == "correct_request"
+    assert "line 9" in payload["message"]
+    assert "git diff" in payload["remediation"]
+    assert "private-key" not in str(payload)
+    assert "synthetic-token" not in str(payload)
+
+
 def test_successful_push_verification_outage_still_returns_sha(monkeypatch):
     import importlib
 

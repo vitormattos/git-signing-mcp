@@ -41,6 +41,9 @@ _REMOTE_REF_REJECTED_RE = re.compile(
 
 _PATCH_HUNK_RE = re.compile(r"error: patch failed: (.+):[0-9]+")
 _PATCH_NOT_APPLIED_RE = re.compile(r"error: (.+): patch does not apply")
+_PATCH_FORMAT_RE = re.compile(
+    r"(?im)^error: (?:corrupt patch|patch fragment without header) at (?:line |<stdin>:)([1-9][0-9]{0,7})\r?$"
+)
 _SAFE_PATCH_PATH_RE = re.compile(r"[A-Za-z0-9_./+-]{1,100}")
 
 
@@ -102,6 +105,20 @@ def _conflicting_patch_paths(stderr: str) -> list[str]:
 def _classify_git_failure(args: list[str], stderr: str) -> GitOperationError:
     operation = next((arg for arg in args[1:] if not arg.startswith("-")), Path(args[0]).name)
     detail = _redact(stderr).lower()
+
+    if operation == "apply":
+        malformed = _PATCH_FORMAT_RE.search(stderr)
+        if malformed is not None:
+            return GitOperationError(
+                code="patch_invalid_format",
+                operation="apply",
+                message=f"Malformed unified diff at line {malformed.group(1)}.",
+                remediation=(
+                    "Generate the patch with git diff against the exact branch HEAD, "
+                    "then validate it with git apply --index --check. "
+                    "Do not hand-edit unified-diff hunk counts."
+                ),
+            )
 
     if operation == "apply" and (
         "patch failed:" in detail

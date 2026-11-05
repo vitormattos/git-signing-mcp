@@ -175,6 +175,28 @@ def test_patch_conflict_error_identifies_paths_and_remediation():
     assert "force-apply" in result.remediation
 
 
+@pytest.mark.parametrize(
+    ("stderr", "line"),
+    [
+        ("error: corrupt patch at line 9\n", "9"),
+        ("error: corrupt patch at <stdin>:7\n", "7"),
+        ("error: patch fragment without header at line 18\n", "18"),
+        ("error: patch fragment without header at <stdin>:19\n", "19"),
+    ],
+)
+def test_malformed_patch_is_actionable_without_leaking_git_stderr(stderr: str, line: str):
+    stderr += "Authorization: Bearer synthetic-sensitive-value\n"
+    result = gitops._classify_git_failure(["git", "apply", "--index", "--check", "-"], stderr)
+
+    assert result.code == "patch_invalid_format"
+    assert result.operation == "apply"
+    assert f"line {line}" in str(result)
+    assert "git diff" in result.remediation
+    assert "git apply --index --check" in result.remediation
+    assert "Authorization" not in str(result)
+    assert "synthetic-sensitive-value" not in result.remediation
+
+
 def test_patch_conflict_omits_unsafe_and_sensitive_paths():
     stderr = (
         "error: patch failed: ../../escape.py:1\n"
@@ -188,6 +210,37 @@ def test_patch_conflict_omits_unsafe_and_sensitive_paths():
     assert "../../escape.py" not in str(result)
     assert "github_pat_secretvalue" not in str(result)
     assert "github_pat_secretvalue" not in result.remediation
+
+
+def test_real_malformed_patch_does_not_mutate_worktree(tmp_path: Path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    target = repo / "README.md"
+    target.write_text("current\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+    subprocess.run([
+        "git", "-C", str(repo), "-c", "user.name=Test",
+        "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "seed",
+    ], check=True)
+    malformed = (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1,4 +1,5 @@\n"
+        " current\n"
+        "+new\n"
+    )
+    settings = SimpleNamespace(max_patch_bytes=1024, max_changes=10)
+
+    with pytest.raises(gitops.GitOperationError) as exc_info:
+        gitops._apply_patch(repo, {"PATH": "/usr/bin:/bin"}, malformed, settings)
+
+    assert exc_info.value.code == "patch_invalid_format"
+    assert "line" in str(exc_info.value)
+    assert target.read_text(encoding="utf-8") == "current\n"
+    assert subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain"]) == b""
 
 
 def test_patch_check_failure_does_not_change_worktree(tmp_path: Path):

@@ -151,6 +151,9 @@ Current error codes include:
   branch HEAD. Regenerate it from the current file contents; do not force
   application. Returns `phase=apply`, `write_outcome=not_applied` and
   `next_action=correct_request`.
+- `patch_invalid_format`: the unified diff is malformed (for example, invalid
+  hunk counts). Regenerate it with `git diff` and check it with
+  `git apply --index --check` before resubmitting. No commit was created.
 - `git_operation_failed`: an unclassified Git failure; use the returned
   `request_id` to correlate with the server audit log.
 

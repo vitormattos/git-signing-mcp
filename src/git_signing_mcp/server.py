@@ -368,7 +368,9 @@ def create_signed_git_commit(
                 observed_sha=exc.observed_sha,
             )
         push = exc.operation == "push"
-        patch_conflict = exc.operation == "apply" and exc.code == "patch_does_not_apply"
+        patch_input_error = exc.operation == "apply" and exc.code in {
+            "patch_does_not_apply", "patch_invalid_format",
+        }
         operation_phase = (
             "push" if push else "fetch" if exc.operation in {"fetch", "remote"}
             else "apply" if exc.operation == "apply"
@@ -377,13 +379,13 @@ def create_signed_git_commit(
             else phase
         )
         action = (
-            "correct_request" if patch_conflict
+            "correct_request" if patch_input_error
             else "inspect_remote" if push
             else "reconcile_branch" if exc.code == "branch_head_changed"
             else "contact_operator"
         )
         disposition = (
-            "fix_request" if patch_conflict
+            "fix_request" if patch_input_error
             else "inspect_before_retry" if push
             else "refresh_and_replan" if exc.code == "branch_head_changed"
             else "operator_action"
