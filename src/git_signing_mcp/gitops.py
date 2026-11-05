@@ -42,7 +42,7 @@ _REMOTE_REF_REJECTED_RE = re.compile(
 _PATCH_HUNK_RE = re.compile(r"error: patch failed: (.+):[0-9]+")
 _PATCH_NOT_APPLIED_RE = re.compile(r"error: (.+): patch does not apply")
 _PATCH_FORMAT_RE = re.compile(
-    r"(?im)^error: (?:corrupt patch|patch fragment without header) at line ([1-9][0-9]{0,7})\r?$"
+    r"(?im)^error: (?:corrupt patch|patch fragment without header) at (?:line |<stdin>:)([1-9][0-9]{0,7})\r?$"
 )
 _SAFE_PATCH_PATH_RE = re.compile(r"[A-Za-z0-9_./+-]{1,100}")
 

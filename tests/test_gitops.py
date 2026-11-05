@@ -179,7 +179,9 @@ def test_patch_conflict_error_identifies_paths_and_remediation():
     ("stderr", "line"),
     [
         ("error: corrupt patch at line 9\n", "9"),
+        ("error: corrupt patch at <stdin>:7\n", "7"),
         ("error: patch fragment without header at line 18\n", "18"),
+        ("error: patch fragment without header at <stdin>:19\n", "19"),
     ],
 )
 def test_malformed_patch_is_actionable_without_leaking_git_stderr(stderr: str, line: str):
