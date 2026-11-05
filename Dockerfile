@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-FROM python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2
+FROM python:3.15-slim@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0
 
 LABEL org.opencontainers.image.source="https://github.com/vitormattos/git-signing-mcp" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
