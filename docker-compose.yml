@@ -107,7 +107,7 @@ services:
       start_period: 5s
 
   tunnel-client:
-    image: ghcr.io/openai/tunnel-client:0.0.19@sha256:dcae53be336c062ffdc3f250a287b2a07724c344b8c370a50f54ad033af43151
+    image: ghcr.io/openai/tunnel-client:0.0.20@sha256:333005e6f5df2760f1b9f06fe873f5fc629554218f68c91d9cfbfe467d0fb42b
     restart: unless-stopped
     depends_on:
       mcp:
