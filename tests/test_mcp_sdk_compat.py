@@ -55,7 +55,7 @@ def test_native_mcp_output_schema_and_result_contract(monkeypatch):
         from git_signing_mcp import __version__
 
         assert result.structured_content["server_version"] == __version__
-        assert result.structured_content["tool_schema_version"] == "4"
+        assert result.structured_content["tool_schema_version"] == "5"
 
     anyio.run(exercise)
 

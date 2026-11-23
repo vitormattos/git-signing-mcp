@@ -100,3 +100,43 @@ def test_branch_intent_is_required_and_mutually_exclusive():
             **common, mode="update", expected_head_sha="a" * 40,
             expected_base_sha="b" * 40,
         )
+
+
+def test_merge_request_pins_both_heads_without_content_mutation():
+    request = CommitRequest(
+        repository="LibreSign/libresign", branch="feat/csc", mode="merge",
+        expected_head_sha="a" * 40,
+        merge_source_branch="feat/catalog",
+        expected_merge_source_sha="b" * 40,
+        message="chore: merge signed foundation",
+    )
+    assert not request.changes and request.patch is None
+
+
+@pytest.mark.parametrize("change", [
+    {"expected_merge_source_sha": "short"},
+    {"merge_source_branch": "feat/csc"},
+    {"expected_head_sha": None},
+    {"patch": "diff --git a/x b/x"},
+    {"changes": [FileChange(path="x", content="x")]},
+])
+def test_merge_rejects_unsafe_or_unpinned_requests(change):
+    options = {
+        "repository": "LibreSign/libresign", "branch": "feat/csc",
+        "mode": "merge", "expected_head_sha": "a" * 40,
+        "merge_source_branch": "feat/catalog",
+        "expected_merge_source_sha": "b" * 40,
+        "message": "chore: signed merge",
+    }
+    options.update(change)
+    with pytest.raises(ValidationError):
+        CommitRequest(**options)
+
+
+def test_linear_commit_rejects_merge_source():
+    with pytest.raises(ValidationError):
+        CommitRequest(
+            repository="LibreSign/libresign", branch="feat/csc", mode="update",
+            expected_head_sha="a" * 40, merge_source_branch="feat/catalog",
+            message="chore: update", changes=[FileChange(path="a", content="x")],
+        )

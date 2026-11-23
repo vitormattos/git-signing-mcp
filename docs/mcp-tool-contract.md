@@ -50,7 +50,7 @@ The server logs a `request_id` via structured `commit.requested`,
 audit logs by the exact ID. Neither request data nor secrets belong in audit
 messages or model-visible errors.
 
-`get_identity.tool_schema_version` is now `4`. Schema changes are **not**
+`get_identity.tool_schema_version` is now `5`. Schema changes are **not**
 automatically reflected in an existing ChatGPT connection: refresh/scan the
 MCP plugin, then start a fresh conversation if the old schema remains cached.
 The commit tool retains its name, but v4 **requires** explicit branch intent
@@ -83,3 +83,13 @@ A transport-level **successful** `tools/call` regression test is mandatory.
 Testing only failure results misses post-push SDK validation failures that can
 cause a commit to succeed at GitHub while the model receives an error. The
 agent must inspect the remote before retrying an ambiguous tool error.
+
+## Signed two-parent merge (v5)
+
+Use `create_signed_git_commit` with `mode=merge`, `expected_head_sha`,
+`merge_source_branch` and `expected_merge_source_sha`; omit `changes` and `patch`.
+The server pins both remote heads, fetches history to establish ancestry,
+refuses conflicts, signs a DCO commit with exactly the expected two parents,
+and updates only the target branch through an exact remote lease.
+The API never rewrites existing commits, creates a pull request, or merges into main.
+A source-branch advance or a changed target HEAD requires a fresh review.

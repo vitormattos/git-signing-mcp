@@ -66,7 +66,7 @@ tool call is needed for the initialization metadata.
 
 After upgrading the MCP server, **rescan/reload the app tools** and start a
 new conversation if the existing chat still exposes a cached schema. The v4
-contract is a breaking change: `get_identity.tool_schema_version` must be `"4"`,
+contract is a breaking change: `get_identity.tool_schema_version` must be `"5"`,
 and `create_signed_git_commit` requires `mode="create"` plus an
 `expected_base_sha`, or `mode="update"` plus an `expected_head_sha`.
 Do not bypass this precondition by issuing a call with the older v3 schema.
@@ -79,7 +79,7 @@ the ability to request signatures within the MCP's repository/branch policy.
 Test in this order using only a disposable, authorized feature branch:
 
 1. `get_identity` — confirm the configured name/email, `openpgp` and
-   `tool_schema_version="4"`.
+   `tool_schema_version="5"`.
 2. `verify_commit` — check an existing known signed commit.
 3. Obtain the current base HEAD from GitHub and create a new disposable branch
    with `mode="create"`, `base_branch="main"`,

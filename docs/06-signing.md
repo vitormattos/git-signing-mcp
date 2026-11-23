@@ -158,7 +158,7 @@ Current error codes include:
   `request_id` to correlate with the server audit log.
 
 After the v4 upgrade, `get_identity` reports
-`tool_schema_version: "4"`. Rescan the ChatGPT app tools and start a new
+`tool_schema_version: "5"`. Rescan the ChatGPT app tools and start a new
 conversation if the old schema persists. Signed writes require explicit
 `mode=create` with `expected_base_sha`, or `mode=update` with
 `expected_head_sha`. For confirmed pushes, `next_action=verify_commit`

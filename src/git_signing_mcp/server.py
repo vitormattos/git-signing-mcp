@@ -63,7 +63,8 @@ mcp = MCPServer(
     instructions=(
         "For a new branch, use create_signed_git_commit mode=create with the exact "
         "expected_base_sha of the reviewed base branch. For an existing branch, "
-        "use mode=update with the fresh target expected_head_sha. "
+        "use mode=update with the fresh target expected_head_sha. For a signed "
+        "two-parent merge, use mode=merge with both pinned HEADs and no patch. "
         "Do not blindly retry ambiguous or stale writes; inspect the remote state "
         "and reconcile changes first. Use verify_commit if signing verification "
         "was skipped, unavailable or unverified. The agent handles PRs, CI, rebases "
@@ -137,7 +138,7 @@ def get_identity() -> dict[str, str]:
         "name": settings.git_identity_name,
         "email": settings.git_identity_email,
         "signing_format": settings.signing_format,
-        "tool_schema_version": "4",
+        "tool_schema_version": "5",
         "server_version": __version__,
     }
 
@@ -229,7 +230,9 @@ def create_signed_git_commit(
     """Write a signed commit using explicit branch intent and checked Git HEAD.
 
     Use mode=create with expected_base_sha for a missing target; use mode=update
-    with expected_head_sha for an existing target. Never retry stale writes blindly. An unknown
+    with expected_head_sha for an existing target. For a two-parent signed merge,
+    use mode=merge with expected_head_sha, merge_source_branch and
+    expected_merge_source_sha; merge conflicts are rejected. Never retry stale writes blindly. An unknown
     push outcome requires remote inspection, never a blind retry. This tool does
     not resolve code conflicts, merge PRs or monitor CI.
     """
@@ -266,6 +269,8 @@ def create_signed_git_commit(
                 mode=request.mode,
                 expected_base_sha=request.expected_base_sha,
                 request_id=request_id,
+                merge_source_branch=request.merge_source_branch,
+                expected_merge_source_sha=request.expected_merge_source_sha,
                 changes=request.changes,
                 patch=request.patch,
                 message=request.message,

@@ -409,7 +409,7 @@ class RepositoryCache:
                 base_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
                 if base_sha != expected_base_sha:
                     raise BranchPreconditionError("base_head_mismatch", base_sha)
-            elif mode == "update":
+            elif mode in {"update", "merge"}:
                 if not branch_exists:
                     raise BranchPreconditionError("target_branch_missing", None)
                 source_sha = _run(["git", "rev-parse", "__mcp_source"], cache, env)
@@ -674,6 +674,8 @@ def create_signed_commit(
     mode: str | None = None,
     expected_base_sha: str | None = None,
     request_id: str | None = None,
+    merge_source_branch: str | None = None,
+    expected_merge_source_sha: str | None = None,
     patch: str | None,
     message: str,
     repository_cache: RepositoryCache,
@@ -700,15 +702,46 @@ def create_signed_commit(
             env=env,
             auth_env=git_auth_env,
         ) as repo:
-            if patch is not None:
-                _apply_patch(repo, env, patch, settings)
+            if mode == "merge":
+                assert merge_source_branch is not None
+                assert expected_merge_source_sha is not None
+                from .security import validate_branch_name
+                validate_branch_name(merge_source_branch)
+                # Retrieve full history only for the explicitly authorized merge.
+                # The normal shallow fast-path is unchanged for linear commits.
+                if _run(["git", "rev-parse", "--is-shallow-repository"], repo, env) == "true":
+                    _run(["git", "fetch", "--quiet", "--unshallow", "origin"], repo, git_auth_env)
+                _run([
+                    "git", "fetch", "--quiet", "origin",
+                    f"+refs/heads/{merge_source_branch}:refs/heads/__mcp_merge_source",
+                ], repo, git_auth_env)
+                actual_source_sha = _run([
+                    "git", "rev-parse", "refs/heads/__mcp_merge_source",
+                ], repo, env)
+                if actual_source_sha != expected_merge_source_sha:
+                    raise BranchPreconditionError("merge_source_head_mismatch", actual_source_sha)
+                ancestor = _run([
+                    "git", "merge-base", "HEAD", actual_source_sha,
+                ], repo, env)
+                if ancestor == actual_source_sha:
+                    raise ValueError("source is already an ancestor of the target")
+                _run([
+                    "git", "merge", "--no-commit", "--no-ff", actual_source_sha,
+                ], repo, env)
+                unresolved = _run([
+                    "git", "diff", "--name-only", "--diff-filter=U",
+                ], repo, env)
+                if unresolved:
+                    raise ValueError("merge has unresolved conflicts")
             else:
-                _apply_file_changes(repo, changes, settings)
-
-            _run(["git", "add", "--all"], repo, env)
-            staged_paths = _run(["git", "diff", "--cached", "--name-only"], repo, env)
-            if not staged_paths:
-                raise ValueError("the requested changes produce an empty commit")
+                if patch is not None:
+                    _apply_patch(repo, env, patch, settings)
+                else:
+                    _apply_file_changes(repo, changes, settings)
+                _run(["git", "add", "--all"], repo, env)
+                staged_paths = _run(["git", "diff", "--cached", "--name-only"], repo, env)
+                if not staged_paths:
+                    raise ValueError("the requested changes produce an empty commit")
 
             final_message = normalize_commit_message(
                 message,
@@ -745,12 +778,15 @@ def create_signed_commit(
                     repository=repository, branch=branch, commit_sha=commit_sha,
                 )
 
-            if mode in {"create", "update"}:
+            if mode in {"create", "update", "merge"}:
                 # Exact remote lease is enforced by receive-pack, not by a local lock.
-                # The candidate has the checked-out expected head as its direct parent.
                 parent = _run(["git", "rev-parse", "HEAD^"], repo, env)
                 expected = expected_base_sha if mode == "create" else expected_head_sha
-                if parent != expected:
+                merge_parents = _run(["git", "rev-list", "--parents", "-n", "1", "HEAD"], repo, env).split()
+                correct_merge = (mode != "merge" or merge_parents == [
+                    commit_sha, expected_head_sha, expected_merge_source_sha,
+                ])
+                if parent != expected or not correct_merge:
                     raise GitOperationError(
                         code="candidate_not_fast_forward", operation="push",
                         message="Candidate commit is not based on the reviewed HEAD.",

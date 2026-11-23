@@ -209,7 +209,7 @@ OpenBao should auto-unseal after its container restarts.
 ## M. Post-upgrade smoke test (schema v4)
 
 Confirm the running container and ChatGPT tool metadata both expose
-`get_identity.tool_schema_version="4"`. Rescan tools and open a new ChatGPT
+`get_identity.tool_schema_version="5"`. Rescan tools and open a new ChatGPT
 conversation if the old v3 schema remains cached.
 
 On a disposable, allowlisted feature branch only:
