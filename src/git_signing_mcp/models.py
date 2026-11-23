@@ -29,7 +29,7 @@ class FileChange(BaseModel):
 class CommitRequest(BaseModel):
     repository: str = Field(description="GitHub repository in owner/name form.")
     branch: str = Field(description="Target branch to create or update.")
-    mode: Literal["create", "update"] = Field(
+    mode: Literal["create", "update", "merge"] = Field(
         description="Required intent: create a new branch or update an existing branch."
     )
     base_branch: str = Field(default="main", description="Base for create mode.")
@@ -41,6 +41,8 @@ class CommitRequest(BaseModel):
         default=None,
         description="Required current target HEAD SHA for update mode.",
     )
+    merge_source_branch: str | None = None
+    expected_merge_source_sha: str | None = None
     message: str = Field(min_length=1, max_length=4096)
     changes: list[FileChange] = Field(default_factory=list, max_length=1000)
     patch: str | None = Field(
@@ -62,6 +64,23 @@ class CommitRequest(BaseModel):
     def validate_change_source(self) -> "CommitRequest":
         has_changes = bool(self.changes)
         has_patch = self.patch is not None and self.patch != ""
+        if self.mode == "merge":
+            if has_changes or has_patch:
+                raise ValueError("merge does not accept file changes or patch")
+            if self.expected_head_sha is None or self.expected_base_sha is not None:
+                raise ValueError("merge requires expected_head_sha")
+            if not self.merge_source_branch or not self.expected_merge_source_sha:
+                raise ValueError("merge requires pinned source branch and SHA")
+            if len(self.expected_merge_source_sha) != 40 or any(
+                char not in "0123456789abcdefABCDEF"
+                for char in self.expected_merge_source_sha
+            ):
+                raise ValueError("expected_merge_source_sha must be a 40-character hex SHA")
+            if self.merge_source_branch == self.branch:
+                raise ValueError("cannot merge a branch into itself")
+            return self
+        if self.merge_source_branch is not None or self.expected_merge_source_sha is not None:
+            raise ValueError("merge source is only valid for merge mode")
         if has_changes == has_patch:
             raise ValueError("provide exactly one of changes or patch")
         if self.mode == "create":

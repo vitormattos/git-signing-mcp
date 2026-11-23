@@ -736,3 +736,71 @@ def test_deleted_and_recreated_ref_rejects_stale_writer(tmp_path: Path):
     assert subprocess.check_output(
         ["git", "--git-dir", str(remote), "rev-parse", target], text=True
     ).strip() == recreated
+
+
+@pytest.mark.parametrize("scenario", ["valid", "source_changed", "wrong_parents"])
+def test_signed_merge_checks_pinned_parents_before_remote_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str,
+):
+    from contextlib import contextmanager
+
+    target = "a" * 40
+    source = "b" * 40
+    candidate = "c" * 40
+    calls = []
+
+    @contextmanager
+    def isolated_worktree(**kwargs):
+        assert kwargs["mode"] == "merge"
+        assert kwargs["expected_head_sha"] == target
+        yield tmp_path
+
+    def fake_run(args, cwd, env, *, input_text=None):
+        calls.append(args)
+        if args[:3] == ["git", "rev-parse", "--is-shallow-repository"]:
+            return "true"
+        if args[:3] == ["git", "rev-parse", "refs/heads/__mcp_merge_source"]:
+            return "d" * 40 if scenario == "source_changed" else source
+        if args[:2] == ["git", "merge-base"]:
+            return "e" * 40
+        if args[:3] == ["git", "diff", "--name-only"]:
+            return ""
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return candidate
+        if args[:3] == ["git", "cat-file", "commit"]:
+            return "tree deadbeef\ngpgsig signed-mock\n"
+        if args[:3] == ["git", "rev-parse", "HEAD^"]:
+            return target
+        if args[:3] == ["git", "rev-list", "--parents"]:
+            second = "f" * 40 if scenario == "wrong_parents" else source
+            return f"{candidate} {target} {second}"
+        return ""
+
+    monkeypatch.setattr(gitops, "_run", fake_run)
+    monkeypatch.setattr(gitops, "_commit_with_openpgp_signature", lambda *args: None)
+    monkeypatch.setattr(gitops, "_git_auth_env", lambda env, token: env)
+    monkeypatch.setattr(gitops, "_base_subprocess_env", lambda home: {})
+    cache = SimpleNamespace(worktree=isolated_worktree)
+    openpgp = SimpleNamespace(prepare=lambda key, env, repo: (env, "fingerprint"))
+    settings = SimpleNamespace(
+        git_identity_name="Vitor Mattos", git_identity_email="test@example.invalid",
+        signing_format="openpgp",
+    )
+    kwargs = dict(
+        settings=settings, github_token="token", signing_key="key",
+        signing_passphrase=None, repository="LibreSign/libresign",
+        branch="feat/csc", base_branch="main", expected_head_sha=target,
+        changes=[], mode="merge", expected_base_sha=None, patch=None,
+        merge_source_branch="feat/catalog", expected_merge_source_sha=source,
+        message="chore: signed foundation merge", repository_cache=cache,
+        openpgp_cache=openpgp,
+    )
+    if scenario == "valid":
+        assert gitops.create_signed_commit(**kwargs) == candidate
+        assert any(a[:3] == ["git", "merge", "--no-commit"] for a in calls)
+        assert any(a[:2] == ["git", "push"] and
+                   f"--force-with-lease=refs/heads/feat/csc:{target}" in a for a in calls)
+    else:
+        with pytest.raises((gitops.BranchPreconditionError, gitops.GitOperationError)):
+            gitops.create_signed_commit(**kwargs)
+        assert not any(a[:2] == ["git", "push"] for a in calls)

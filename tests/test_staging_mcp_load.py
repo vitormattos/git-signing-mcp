@@ -67,7 +67,7 @@ def test_mock_mcp_discovery_and_signed_write_no_secret_log():
                  "outputSchema": {"properties": {"commit_sha": {"type": "string"}}}},
             ]}
         elif body["params"]["name"] == "get_identity":
-            result = {"structuredContent": {"tool_schema_version": "4", "server_version": "0.1.0"}}
+            result = {"structuredContent": {"tool_schema_version": "5", "server_version": "0.1.0"}}
         else:
             result = {"isError": False, "structuredContent": {
                 "success": True, "write_outcome": "pushed", "commit_sha": "b" * 40,
@@ -86,7 +86,7 @@ def test_mock_mcp_discovery_and_signed_write_no_secret_log():
             ).request(1, 0, 0))
             return identity, write
     identity, result = asyncio.run(exercise())
-    assert identity["tool_schema_version"] == "4"
+    assert identity["tool_schema_version"] == "5"
     assert result["status"] == "ok"
     assert result["sha"] == "b" * 40
     assert all(secret == "sensitive-token" for _, secret in seen)

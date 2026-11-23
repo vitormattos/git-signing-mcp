@@ -116,8 +116,8 @@ class MCPClient:
             "name": "get_identity", "arguments": {},
         })
         data = identity.get("structuredContent") or {}
-        if data.get("tool_schema_version") != "4":
-            raise RuntimeError("MCP schema v4 is required")
+        if data.get("tool_schema_version") != "5":
+            raise RuntimeError("MCP schema v5 is required")
         return {"name": initialized["serverInfo"]["name"],
                 "server_version": data.get("server_version"),
                 "tool_schema_version": data["tool_schema_version"]}
